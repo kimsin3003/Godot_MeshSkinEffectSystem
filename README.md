@@ -30,7 +30,7 @@ godot --path D:\MeshSurfaceImpactSystem
 
 Controls:
 
-- Left click: add the selected surface effect exactly at the clicked visual mesh position.
+- Left click: add the selected surface effect at the clicked visual mesh triangle.
 - Right click: start sand wind from the camera direction toward the clicked character surface.
 - `1`-`4`: select effect id.
 - Mouse wheel or `[` / `]`: change radius.
@@ -50,6 +50,8 @@ godot_console --headless --path D:\MeshSurfaceImpactSystem --script res://tests/
 godot_console --headless --path D:\MeshSurfaceImpactSystem --script res://tests/test_runtime_clothing_swap.gd
 godot_console --headless --path D:\MeshSurfaceImpactSystem --script res://tests/test_real_character_assets.gd
 godot_console --headless --path D:\MeshSurfaceImpactSystem --script res://tests/test_real_layered_garment_asset.gd
+godot_console --headless --path D:\MeshSurfaceImpactSystem --script res://tests/test_skinned_surface_attachment.gd
+godot_console --headless --path D:\MeshSurfaceImpactSystem --script res://tests/test_deformed_surface_attachment.gd
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/test_effect_playtest_scene.gd
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_visual_smoke.gd
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_real_asset_smoke.gd

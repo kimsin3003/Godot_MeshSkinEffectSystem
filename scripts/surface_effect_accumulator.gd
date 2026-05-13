@@ -7,12 +7,14 @@ const DEFAULT_SAMPLE_LIMIT := 8192
 const EFFECT_BULLET_IMPACT_ID := 1
 
 @export var character_root: Node3D
+@export var deformation_provider: Node
 @export var sample_limit := DEFAULT_SAMPLE_LIMIT
 @export var impact_radius_m := DEFAULT_IMPACT_RADIUS_M
 @export var shader: Shader = preload("res://shaders/surface_effects.gdshader")
 
 var sampler := MeshSurfaceSampler.new()
 var shader_materials: Array[ShaderMaterial] = []
+var surface_events: Array[Dictionary] = []
 var impact_spheres := PackedVector4Array()
 var impact_dirs := PackedVector4Array()
 var impact_meta := PackedVector4Array()
@@ -29,6 +31,8 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	if character_root != null and not shader_materials.is_empty():
+		_rebuild_event_uniform_arrays()
+		_sync_impact_params()
 		_sync_transform_params()
 
 
@@ -49,7 +53,7 @@ func get_material_instance_count() -> int:
 
 
 func get_impact_count() -> int:
-	return impact_spheres.size()
+	return surface_events.size()
 
 
 func estimate_memory_bytes() -> int:
@@ -59,6 +63,7 @@ func estimate_memory_bytes() -> int:
 
 
 func clear_impacts() -> void:
+	surface_events.clear()
 	impact_spheres.clear()
 	impact_dirs.clear()
 	impact_meta.clear()
@@ -94,7 +99,7 @@ func add_surface_effect(
 		shot_dir_world,
 		radius_m * 1.6
 	)
-	_store_surface_event(effect_id, resolved_world, shot_dir_world, radius_m, strength)
+	_store_surface_event(effect_id, resolved_world, shot_dir_world, radius_m, strength, {})
 	return resolved_world
 
 
@@ -112,8 +117,48 @@ func add_surface_effect_at_visual_surface(
 	if direction_world.length_squared() <= 0.000001:
 		direction_world = Vector3.FORWARD
 
-	_store_surface_event(effect_id, visual_hit_world, direction_world, radius_m, strength)
+	_store_surface_event(effect_id, visual_hit_world, direction_world, radius_m, strength, {})
 	return visual_hit_world
+
+
+func add_surface_effect_at_triangle(
+	effect_id: int,
+	mesh_instance: MeshInstance3D,
+	surface_index: int,
+	triangle_indices: PackedInt32Array,
+	barycentric: Vector3,
+	effect_direction_world: Vector3,
+	radius_m: float = impact_radius_m,
+	strength: float = 1.0
+) -> Vector3:
+	if character_root == null or mesh_instance == null or triangle_indices.size() != 3:
+		return Vector3.ZERO
+
+	var direction_world := effect_direction_world
+	if direction_world.length_squared() <= 0.000001:
+		direction_world = Vector3.FORWARD
+
+	var attachment := {
+		"mesh_instance": mesh_instance,
+		"surface_index": surface_index,
+		"triangle_indices": PackedInt32Array(triangle_indices),
+		"barycentric": barycentric,
+	}
+	var visual_hit_world := _resolve_attachment_world(attachment)
+	_store_surface_event(effect_id, visual_hit_world, direction_world, radius_m, strength, attachment)
+	return visual_hit_world
+
+
+func resolve_vertex_world(
+	mesh_instance: MeshInstance3D,
+	arrays: Array,
+	vertex_index: int,
+	surface_index: int = -1
+) -> Vector3:
+	var provider_position: Variant = _try_resolve_provider_vertex_world(mesh_instance, surface_index, arrays, vertex_index)
+	if provider_position is Vector3:
+		return provider_position
+	return mesh_instance.to_global(_resolve_vertex_mesh_local(mesh_instance, arrays, vertex_index))
 
 
 func _store_surface_event(
@@ -121,24 +166,27 @@ func _store_surface_event(
 	center_world: Vector3,
 	direction_world: Vector3,
 	radius_m: float,
-	strength: float
+	strength: float,
+	attachment: Dictionary
 ) -> void:
 	var local_center := character_root.to_local(center_world)
 	var local_dir := (character_root.global_transform.basis.inverse() * direction_world.normalized()).normalized()
-	var sphere := Vector4(local_center.x, local_center.y, local_center.z, radius_m)
-	var direction := Vector4(local_dir.x, local_dir.y, local_dir.z, clamp(strength, 0.0, 4.0))
-	var meta := Vector4(float(effect_id), 0.0, 0.0, 0.0)
+	var record := {
+		"effect_id": effect_id,
+		"center_local": local_center,
+		"direction_local": local_dir,
+		"radius": radius_m,
+		"strength": clamp(strength, 0.0, 4.0),
+		"attachment": attachment,
+	}
 
-	if impact_spheres.size() < MAX_IMPACTS:
-		impact_spheres.append(sphere)
-		impact_dirs.append(direction)
-		impact_meta.append(meta)
+	if surface_events.size() < MAX_IMPACTS:
+		surface_events.append(record)
 	else:
-		impact_spheres[impact_cursor] = sphere
-		impact_dirs[impact_cursor] = direction
-		impact_meta[impact_cursor] = meta
+		surface_events[impact_cursor] = record
 		impact_cursor = (impact_cursor + 1) % MAX_IMPACTS
 
+	_rebuild_event_uniform_arrays()
 	_sync_impact_params()
 
 
@@ -256,6 +304,150 @@ func _sync_impact_params() -> void:
 		material.set_shader_parameter("impact_spheres", impact_spheres)
 		material.set_shader_parameter("impact_dirs", impact_dirs)
 		material.set_shader_parameter("impact_meta", impact_meta)
+
+
+func _rebuild_event_uniform_arrays() -> void:
+	impact_spheres.clear()
+	impact_dirs.clear()
+	impact_meta.clear()
+
+	for record in surface_events:
+		var center_local: Vector3 = record["center_local"]
+		var attachment: Dictionary = record["attachment"]
+		if not attachment.is_empty():
+			center_local = character_root.to_local(_resolve_attachment_world(attachment))
+
+		var direction_local: Vector3 = record["direction_local"]
+		impact_spheres.append(Vector4(center_local.x, center_local.y, center_local.z, float(record["radius"])))
+		impact_dirs.append(Vector4(direction_local.x, direction_local.y, direction_local.z, float(record["strength"])))
+		impact_meta.append(Vector4(float(record["effect_id"]), 0.0, 0.0, 0.0))
+
+
+func _resolve_attachment_world(attachment: Dictionary) -> Vector3:
+	var mesh_instance: MeshInstance3D = attachment["mesh_instance"]
+	if not is_instance_valid(mesh_instance):
+		return character_root.global_position if character_root != null else Vector3.ZERO
+
+	var surface_index: int = attachment["surface_index"]
+	var triangle_indices: PackedInt32Array = attachment["triangle_indices"]
+	var barycentric: Vector3 = attachment["barycentric"]
+	var mesh := mesh_instance.mesh
+	if mesh == null or surface_index < 0 or surface_index >= mesh.get_surface_count():
+		return mesh_instance.global_position
+
+	var arrays := mesh.surface_get_arrays(surface_index)
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	if triangle_indices[0] >= vertices.size() or triangle_indices[1] >= vertices.size() or triangle_indices[2] >= vertices.size():
+		return mesh_instance.global_position
+
+	var p0 := resolve_vertex_world(mesh_instance, arrays, triangle_indices[0], surface_index)
+	var p1 := resolve_vertex_world(mesh_instance, arrays, triangle_indices[1], surface_index)
+	var p2 := resolve_vertex_world(mesh_instance, arrays, triangle_indices[2], surface_index)
+	return p0 * barycentric.x + p1 * barycentric.y + p2 * barycentric.z
+
+
+func _try_resolve_provider_vertex_world(
+	mesh_instance: MeshInstance3D,
+	surface_index: int,
+	arrays: Array,
+	vertex_index: int
+) -> Variant:
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var base_position := vertices[vertex_index]
+	if deformation_provider != null and deformation_provider.has_method("resolve_surface_vertex_world"):
+		return deformation_provider.call(
+			"resolve_surface_vertex_world",
+			mesh_instance,
+			surface_index,
+			vertex_index,
+			base_position
+		)
+	if mesh_instance.has_method("resolve_surface_vertex_world"):
+		return mesh_instance.call("resolve_surface_vertex_world", surface_index, vertex_index, base_position)
+	return null
+
+
+func _resolve_vertex_mesh_local(mesh_instance: MeshInstance3D, arrays: Array, vertex_index: int) -> Vector3:
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var base_position := vertices[vertex_index]
+	if mesh_instance.skin == null:
+		return base_position
+
+	var bones: PackedInt32Array = arrays[Mesh.ARRAY_BONES]
+	var weights: PackedFloat32Array = arrays[Mesh.ARRAY_WEIGHTS]
+	if bones.is_empty() or weights.is_empty():
+		return base_position
+
+	var skeleton := _find_skeleton_for_mesh(mesh_instance)
+	if skeleton == null:
+		return base_position
+
+	var influences_per_vertex := int(bones.size() / max(vertices.size(), 1))
+	if influences_per_vertex <= 0:
+		return base_position
+
+	var skeleton_local := Vector3.ZERO
+	var total_weight := 0.0
+	var first_influence := vertex_index * influences_per_vertex
+	for influence_index in influences_per_vertex:
+		var array_index := first_influence + influence_index
+		if array_index >= bones.size() or array_index >= weights.size():
+			break
+		var weight := weights[array_index]
+		if weight <= 0.0001:
+			continue
+		var bind_index := bones[array_index]
+		var bone_index := _resolve_skin_bone_index(mesh_instance.skin, skeleton, bind_index)
+		if bone_index < 0:
+			continue
+		var bind_pose := mesh_instance.skin.get_bind_pose(bind_index)
+		var bone_pose := skeleton.get_bone_global_pose(bone_index)
+		skeleton_local += (bone_pose * (bind_pose * base_position)) * weight
+		total_weight += weight
+
+	if total_weight <= 0.0001:
+		return base_position
+
+	var skeleton_world := skeleton.global_transform * (skeleton_local / total_weight)
+	return mesh_instance.to_local(skeleton_world)
+
+
+func _find_skeleton_for_mesh(mesh_instance: MeshInstance3D) -> Skeleton3D:
+	if not mesh_instance.skeleton.is_empty() and mesh_instance.has_node(mesh_instance.skeleton):
+		var node := mesh_instance.get_node(mesh_instance.skeleton)
+		if node is Skeleton3D:
+			return node
+
+	var parent := mesh_instance.get_parent()
+	while parent != null:
+		if parent is Skeleton3D:
+			return parent
+		parent = parent.get_parent()
+
+	if character_root != null:
+		return _find_first_skeleton(character_root)
+	return null
+
+
+func _find_first_skeleton(node: Node) -> Skeleton3D:
+	if node is Skeleton3D:
+		return node
+	for child in node.get_children():
+		var skeleton := _find_first_skeleton(child)
+		if skeleton != null:
+			return skeleton
+	return null
+
+
+func _resolve_skin_bone_index(skin: Skin, skeleton: Skeleton3D, bind_index: int) -> int:
+	var bone_index := skin.get_bind_bone(bind_index)
+	if bone_index >= 0:
+		return bone_index
+
+	var bind_name := skin.get_bind_name(bind_index)
+	if not String(bind_name).is_empty():
+		return skeleton.find_bone(bind_name)
+	return -1
 
 
 func _sync_sand_params() -> void:

@@ -25,12 +25,8 @@ func _run() -> void:
 	var screen_position := Vector2(480, 270)
 	var ray_origin := camera.project_ray_origin(screen_position)
 	var ray_dir := camera.project_ray_normal(screen_position).normalized()
-	var visual_hit: Dictionary = scene.call("_raycast_visual_mesh", ray_origin, ray_dir)
+	var visual_hit: Dictionary = scene.call("_apply_surface_event", screen_position)
 	_assert(not visual_hit.is_empty(), "playtest center ray did not hit visual mesh")
-	scene.call("_apply_surface_event", Vector2(480, 270))
-
-	for frame in range(5):
-		await process_frame
 
 	_assert(accumulator.get_impact_count() == 1, "playtest click did not add a surface effect")
 	_assert(accumulator.estimate_memory_bytes() < 1024 * 1024, "playtest memory estimate exceeded 1 MB")
@@ -38,9 +34,12 @@ func _run() -> void:
 	_assert(material != null, "playtest scene did not bind shader materials")
 	var spheres: PackedVector4Array = material.get_shader_parameter("impact_spheres")
 	var character_root: Node3D = scene.get_node("Character")
-	var expected_local: Vector3 = character_root.to_local(visual_hit["position"])
+	var expected_local: Vector3 = character_root.to_local(visual_hit["event_position"])
 	var recorded_local := Vector3(spheres[0].x, spheres[0].y, spheres[0].z)
 	_assert(recorded_local.distance_to(expected_local) < 0.001, "playtest impact center did not match the clicked visual hit")
+
+	for frame in range(5):
+		await process_frame
 
 	scene.call("start_sandstorm", Vector3(1.0, 0.0, 0.0))
 

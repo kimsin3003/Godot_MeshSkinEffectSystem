@@ -149,18 +149,28 @@ func _apply_test_palette() -> void:
 				material.set_shader_parameter("effect_4_color", Color(1.0, 0.74, 0.05, 1.0))
 
 
-func _apply_surface_event(screen_position: Vector2) -> void:
+func _apply_surface_event(screen_position: Vector2) -> Dictionary:
 	var ray_origin := camera.project_ray_origin(screen_position)
 	var ray_dir := camera.project_ray_normal(screen_position).normalized()
 	var hit := _raycast_visual_mesh(ray_origin, ray_dir)
 	if hit.is_empty():
 		_update_hud("miss")
-		return
+		return {}
 
-	var visual_hit: Vector3 = hit["position"]
-	accumulator.add_surface_effect_at_visual_surface(selected_effect_id, visual_hit, ray_dir, radius_m, strength)
+	var visual_hit: Vector3 = accumulator.add_surface_effect_at_triangle(
+		selected_effect_id,
+		hit["mesh_instance"],
+		hit["surface"],
+		hit["triangle_indices"],
+		hit["barycentric"],
+		ray_dir,
+		radius_m,
+		strength
+	)
 	_add_marker(visual_hit, _color_for_effect(selected_effect_id))
 	_update_hud("hit " + str(hit["mesh"]))
+	hit["event_position"] = visual_hit
+	return hit
 
 
 func _start_sandstorm_from_click(screen_position: Vector2) -> void:
@@ -238,16 +248,19 @@ func _raycast_visual_mesh(ray_origin: Vector3, ray_dir: Vector3) -> Dictionary:
 				var i0 := indices[triangle_index * 3] if not indices.is_empty() else triangle_index * 3
 				var i1 := indices[triangle_index * 3 + 1] if not indices.is_empty() else triangle_index * 3 + 1
 				var i2 := indices[triangle_index * 3 + 2] if not indices.is_empty() else triangle_index * 3 + 2
-				var v0 := mesh_instance.to_global(vertices[i0])
-				var v1 := mesh_instance.to_global(vertices[i1])
-				var v2 := mesh_instance.to_global(vertices[i2])
+				var v0 := accumulator.resolve_vertex_world(mesh_instance, arrays, i0, surface_index)
+				var v1 := accumulator.resolve_vertex_world(mesh_instance, arrays, i1, surface_index)
+				var v2 := accumulator.resolve_vertex_world(mesh_instance, arrays, i2, surface_index)
 				var t := _intersect_ray_triangle(ray_origin, ray_dir, v0, v1, v2)
 				if t > 0.0 and t < best_t:
 					best_t = t
 					best = {
 						"position": ray_origin + ray_dir * t,
 						"mesh": mesh_instance.name,
+						"mesh_instance": mesh_instance,
 						"surface": surface_index,
+						"triangle_indices": PackedInt32Array([i0, i1, i2]),
+						"barycentric": _triangle_barycentric(ray_origin + ray_dir * t, v0, v1, v2),
 					}
 	return best
 
@@ -273,6 +286,23 @@ func _intersect_ray_triangle(origin: Vector3, dir: Vector3, v0: Vector3, v1: Vec
 
 	var t := edge2.dot(qvec) * inv_det
 	return t if t > 0.0001 else -1.0
+
+
+func _triangle_barycentric(point: Vector3, v0: Vector3, v1: Vector3, v2: Vector3) -> Vector3:
+	var edge0 := v1 - v0
+	var edge1 := v2 - v0
+	var point_delta := point - v0
+	var d00 := edge0.dot(edge0)
+	var d01 := edge0.dot(edge1)
+	var d11 := edge1.dot(edge1)
+	var d20 := point_delta.dot(edge0)
+	var d21 := point_delta.dot(edge1)
+	var denom := d00 * d11 - d01 * d01
+	if abs(denom) < 0.000001:
+		return Vector3(1.0, 0.0, 0.0)
+	var v := (d11 * d20 - d01 * d21) / denom
+	var w := (d00 * d21 - d01 * d20) / denom
+	return Vector3(1.0 - v - w, v, w)
 
 
 func _collect_meshes(node: Node, meshes: Array[MeshInstance3D]) -> void:
