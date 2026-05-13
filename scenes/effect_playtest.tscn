@@ -1,0 +1,71 @@
+[gd_scene load_steps=3 format=3 uid="uid://effect_playtest_lab"]
+
+[ext_resource type="Script" path="res://scripts/effect_playtest_controller.gd" id="1_controller"]
+[ext_resource type="Script" path="res://scripts/surface_effect_accumulator.gd" id="2_accumulator"]
+
+[sub_resource type="Environment" id="Environment_playtest"]
+background_mode = 1
+background_color = Color(0.012, 0.013, 0.016, 1)
+ambient_light_source = 2
+ambient_light_color = Color(1, 1, 1, 1)
+ambient_light_energy = 1.0
+
+[node name="EffectPlaytest" type="Node3D"]
+script = ExtResource("1_controller")
+
+[node name="Character" type="Node3D" parent="."]
+
+[node name="SurfaceEffectAccumulator" type="Node" parent="."]
+script = ExtResource("2_accumulator")
+character_root = NodePath("../Character")
+sample_limit = 32768
+
+[node name="Camera3D" type="Camera3D" parent="."]
+current = true
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.707107, -0.353553, 0.612372, 0, 0.866025, 0.5, -0.707107, -0.353553, 0.612372, 0, 2.5, 2.0)
+light_energy = 2.6
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_playtest")
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="Panel" type="PanelContainer" parent="HUD"]
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -176.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = 174.0
+
+[node name="MarginContainer" type="MarginContainer" parent="HUD/Panel"]
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 8
+
+[node name="VBox" type="VBoxContainer" parent="HUD/Panel/MarginContainer"]
+
+[node name="EffectLabel" type="Label" parent="HUD/Panel/MarginContainer/VBox"]
+text = "Effect 1"
+
+[node name="RadiusLabel" type="Label" parent="HUD/Panel/MarginContainer/VBox"]
+text = "Radius 0.09 m"
+
+[node name="StrengthLabel" type="Label" parent="HUD/Panel/MarginContainer/VBox"]
+text = "Strength 1.0"
+
+[node name="SandLabel" type="Label" parent="HUD/Panel/MarginContainer/VBox"]
+text = "Sand off 1.00 0.00 0.00"
+
+[node name="EventsLabel" type="Label" parent="HUD/Panel/MarginContainer/VBox"]
+text = "Events 0 / 32"
+
+[node name="AssetLabel" type="Label" parent="HUD/Panel/MarginContainer/VBox"]
+text = "Asset"
+
+[node name="StatusLabel" type="Label" parent="HUD/Panel/MarginContainer/VBox"]
+text = "ready"

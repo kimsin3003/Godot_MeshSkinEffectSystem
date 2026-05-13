@@ -1,0 +1,21 @@
+[gd_scene load_steps=3 format=3 uid="uid://mesh_surface_demo"]
+
+[ext_resource type="Script" path="res://scripts/demo_controller.gd" id="1_demo"]
+[ext_resource type="Script" path="res://scripts/surface_effect_accumulator.gd" id="2_accum"]
+
+[node name="Demo" type="Node3D"]
+script = ExtResource("1_demo")
+
+[node name="Character" type="Node3D" parent="."]
+
+[node name="SurfaceEffectAccumulator" type="Node" parent="."]
+script = ExtResource("2_accum")
+character_root = NodePath("../Character")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(0.866025, 0, 0.5, 0.12941, 0.965926, -0.224144, -0.482963, 0.258819, 0.836516, -2.4, 1.35, 2.6)
+current = true
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.707107, -0.353553, 0.612372, 0, 0.866025, 0.5, -0.707107, -0.353553, 0.612372, 0, 2.5, 2.0)
+light_energy = 2.4

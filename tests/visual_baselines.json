@@ -1,0 +1,26 @@
+{
+  "render_visual_smoke": {
+    "non_background": [1600, 2300]
+  },
+  "render_real_asset_smoke": {
+    "non_background": [1500, 2300],
+    "impact_samples": [250, 850]
+  },
+  "render_animated_real_asset_smoke": {
+    "pose_delta": [4.0, 5.5],
+    "non_background": [1800, 2600],
+    "impact_samples": [40, 180]
+  },
+  "render_sand_mask_smoke": {
+    "left_early": [0.07, 0.10],
+    "left_late": [0.62, 0.72],
+    "right_late": [0.07, 0.10],
+    "parallel_late": [0.07, 0.10]
+  },
+  "render_real_seam_boundary_smoke": {
+    "non_background": [1500, 2100],
+    "impact_samples": [120, 260],
+    "left_samples": [5, 60],
+    "right_samples": [40, 130]
+  }
+}
