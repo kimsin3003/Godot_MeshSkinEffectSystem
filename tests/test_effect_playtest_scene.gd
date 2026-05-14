@@ -21,6 +21,9 @@ func _run() -> void:
 
 	var accumulator: SurfaceEffectAccumulator = scene.get_node("SurfaceEffectAccumulator")
 	_assert(accumulator.get_sample_count() > 0, "playtest scene did not build surface samples")
+	var active_animation := String(scene.get("active_animation_name"))
+	_assert(active_animation.ends_with("|Run") or active_animation == "Run", "playtest scene did not choose a running animation")
+	_assert(bool(scene.get("animation_enabled")), "playtest animation was not enabled")
 	var camera: Camera3D = scene.get_node("Camera3D")
 	var screen_position := Vector2(480, 270)
 	var ray_origin := camera.project_ray_origin(screen_position)

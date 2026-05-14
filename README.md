@@ -37,6 +37,10 @@ Controls:
 - `1`-`4`: select effect id.
 - Mouse wheel or `[` / `]`: change radius.
 - `-` / `=`: change strength.
+- `W` / `A` / `S` / `D`: move the camera.
+- Arrow keys: rotate the camera.
+- `Z` / `X`: move the camera down/up.
+- `P`: toggle character animation playback.
 - `T`: toggle sand wind.
 - `F`: restart the sand front from the current direction.
 - `Q` / `E`: rotate the sand wind direction.

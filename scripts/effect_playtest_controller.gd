@@ -8,6 +8,8 @@ const DEFAULT_RADIUS_M := 0.015
 const MIN_RADIUS_M := 0.005
 const MAX_RADIUS_M := 0.35
 const RADIUS_STEP_M := 0.005
+const CAMERA_MOVE_SPEED := 1.8
+const CAMERA_TURN_SPEED := 1.4
 
 @onready var character_root: Node3D = $Character
 @onready var camera: Camera3D = $Camera3D
@@ -31,6 +33,9 @@ var sand_direction_world := Vector3(1.0, 0.0, 0.0)
 var sand_front := -10.0
 var sand_speed := 0.45
 var sand_amount := 0.85
+var animation_enabled := true
+var animation_players: Array[AnimationPlayer] = []
+var active_animation_name := ""
 
 
 func _ready() -> void:
@@ -40,6 +45,8 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	_update_camera_controls(delta)
+
 	if sand_enabled:
 		sand_front += sand_speed * delta
 		accumulator.set_sand_state(sand_direction_world, sand_front, sand_amount)
@@ -82,6 +89,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_C:
 				accumulator.clear_impacts()
 				_update_hud("cleared")
+			KEY_P:
+				animation_enabled = not animation_enabled
+				_set_animation_enabled(animation_enabled)
+				_update_hud("animation on" if animation_enabled else "animation off")
 			KEY_T:
 				sand_enabled = not sand_enabled
 				_update_hud("sand on" if sand_enabled else "sand off")
@@ -108,6 +119,9 @@ func _load_asset(asset_index: int) -> void:
 		child.queue_free()
 
 	current_asset_index = asset_index
+	character_root.rotation = Vector3.ZERO
+	animation_players.clear()
+	active_animation_name = ""
 	var path := ADVENTURER_PATH if asset_index == 0 else SOLDIER_PATH
 	current_asset_name = "Adventurer" if asset_index == 0 else "Soldier"
 	var asset_root := _load_gltf_scene(path)
@@ -119,6 +133,8 @@ func _load_asset(asset_index: int) -> void:
 
 	for frame in 2:
 		await get_tree().process_frame
+	_collect_animation_players(character_root, animation_players)
+	_play_first_animation()
 	accumulator.rebuild_for_character(character_root)
 	_apply_test_palette()
 
@@ -317,6 +333,68 @@ func _collect_meshes(node: Node, meshes: Array[MeshInstance3D]) -> void:
 		_collect_meshes(child, meshes)
 
 
+func _collect_animation_players(node: Node, players: Array[AnimationPlayer]) -> void:
+	if node is AnimationPlayer:
+		players.append(node)
+
+	for child in node.get_children():
+		_collect_animation_players(child, players)
+
+
+func _play_first_animation() -> void:
+	for player in animation_players:
+		var animation_list := player.get_animation_list()
+		if animation_list.is_empty():
+			continue
+
+		active_animation_name = _choose_animation(animation_list)
+		player.play(active_animation_name)
+		player.advance(0.0)
+		_set_animation_enabled(animation_enabled)
+		return
+
+
+func _choose_animation(animation_list: PackedStringArray) -> StringName:
+	for preferred in ["Run", "Walk", "Idle"]:
+		for animation_name in animation_list:
+			if String(animation_name).ends_with("|" + preferred) or String(animation_name) == preferred:
+				return StringName(animation_name)
+	return StringName(animation_list[0])
+
+
+func _set_animation_enabled(enabled: bool) -> void:
+	for player in animation_players:
+		player.speed_scale = 1.0 if enabled else 0.0
+
+
+func _update_camera_controls(delta: float) -> void:
+	var move := Vector3.ZERO
+	var basis := camera.global_transform.basis
+	if Input.is_key_pressed(KEY_W):
+		move -= basis.z
+	if Input.is_key_pressed(KEY_S):
+		move += basis.z
+	if Input.is_key_pressed(KEY_D):
+		move += basis.x
+	if Input.is_key_pressed(KEY_A):
+		move -= basis.x
+	if Input.is_key_pressed(KEY_X):
+		move += Vector3.UP
+	if Input.is_key_pressed(KEY_Z):
+		move -= Vector3.UP
+	if move.length_squared() > 0.000001:
+		camera.global_position += move.normalized() * CAMERA_MOVE_SPEED * delta
+
+	if Input.is_key_pressed(KEY_LEFT):
+		camera.global_rotate(Vector3.UP, CAMERA_TURN_SPEED * delta)
+	if Input.is_key_pressed(KEY_RIGHT):
+		camera.global_rotate(Vector3.UP, -CAMERA_TURN_SPEED * delta)
+	if Input.is_key_pressed(KEY_UP):
+		camera.rotate_object_local(Vector3.RIGHT, CAMERA_TURN_SPEED * delta)
+	if Input.is_key_pressed(KEY_DOWN):
+		camera.rotate_object_local(Vector3.RIGHT, -CAMERA_TURN_SPEED * delta)
+
+
 func _create_fallback_character() -> void:
 	_add_capsule_layer("Body", 0.38, 1.45, Color(0.55, 0.58, 0.62))
 	_add_capsule_layer("Jacket", 0.43, 1.36, Color(0.26, 0.32, 0.42))
@@ -390,5 +468,13 @@ func _update_hud(status: String) -> void:
 		sand_direction_world.z,
 	]
 	events_label.text = "Accumulated Events %d" % accumulator.get_impact_count()
-	asset_label.text = "Asset " + current_asset_name
+	asset_label.text = "Asset %s Anim %s Cam WASD+Arrows" % [
+		current_asset_name,
+		_short_animation_name() if not String(active_animation_name).is_empty() and animation_enabled else "off",
+	]
 	status_label.text = status
+
+
+func _short_animation_name() -> String:
+	var parts := String(active_animation_name).split("|")
+	return parts[parts.size() - 1] if not parts.is_empty() else String(active_animation_name)
