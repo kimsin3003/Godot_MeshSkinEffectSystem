@@ -10,6 +10,9 @@ const MAX_RADIUS_M := 0.35
 const RADIUS_STEP_M := 0.005
 const CAMERA_MOVE_SPEED := 1.8
 const CAMERA_TURN_SPEED := 1.4
+const CAMERA_MOUSE_ORBIT_SENSITIVITY := 0.006
+const CAMERA_MIN_PITCH := -1.1
+const CAMERA_MAX_PITCH := 1.1
 
 @onready var character_root: Node3D = $Character
 @onready var camera: Camera3D = $Camera3D
@@ -37,6 +40,10 @@ var animation_enabled := true
 var animation_players: Array[AnimationPlayer] = []
 var active_animation_name := ""
 var raycast_surfaces: Array[Dictionary] = []
+var camera_focus := Vector3.ZERO
+var camera_orbit_yaw := 0.0
+var camera_orbit_pitch := 0.0
+var camera_orbit_distance := 2.8
 
 
 func _ready() -> void:
@@ -57,6 +64,15 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion:
+		var motion_event := event as InputEventMouseMotion
+		if (motion_event.button_mask & MOUSE_BUTTON_MASK_MIDDLE) != 0:
+			_orbit_camera(
+				-motion_event.relative.x * CAMERA_MOUSE_ORBIT_SENSITIVITY,
+				-motion_event.relative.y * CAMERA_MOUSE_ORBIT_SENSITIVITY
+			)
+			_update_hud("camera")
+
 	if event is InputEventMouseButton and event.pressed:
 		var mouse_event := event as InputEventMouseButton
 		if mouse_event.button_index == MOUSE_BUTTON_LEFT:
@@ -154,10 +170,12 @@ func _load_gltf_scene(path: String) -> Node:
 
 
 func _configure_camera() -> void:
+	camera_focus = Vector3(0.0, 1.0, 0.0)
 	camera.global_position = Vector3(-1.75, 1.25, 2.15)
-	camera.look_at(Vector3(0.0, 1.0, 0.0), Vector3.UP)
 	camera.fov = 34.0
 	camera.current = true
+	_sync_orbit_from_camera()
+	_apply_orbit_camera()
 
 
 func _apply_test_palette() -> void:
@@ -510,29 +528,68 @@ func _ensure_animation_playback() -> void:
 func _update_camera_controls(delta: float) -> void:
 	var move := Vector3.ZERO
 	var basis := camera.global_transform.basis
+	var forward := -basis.z
+	forward.y = 0.0
+	forward = forward.normalized() if forward.length_squared() > 0.000001 else Vector3.FORWARD
+	var right := basis.x
+	right.y = 0.0
+	right = right.normalized() if right.length_squared() > 0.000001 else Vector3.RIGHT
+
 	if Input.is_key_pressed(KEY_W):
-		move -= basis.z
+		move += forward
 	if Input.is_key_pressed(KEY_S):
-		move += basis.z
+		move -= forward
 	if Input.is_key_pressed(KEY_D):
-		move += basis.x
+		move += right
 	if Input.is_key_pressed(KEY_A):
-		move -= basis.x
+		move -= right
 	if Input.is_key_pressed(KEY_X):
 		move += Vector3.UP
 	if Input.is_key_pressed(KEY_Z):
 		move -= Vector3.UP
+	var camera_changed := false
 	if move.length_squared() > 0.000001:
-		camera.global_position += move.normalized() * CAMERA_MOVE_SPEED * delta
+		camera_focus += move.normalized() * CAMERA_MOVE_SPEED * delta
+		camera_changed = true
 
 	if Input.is_key_pressed(KEY_LEFT):
-		camera.global_rotate(Vector3.UP, CAMERA_TURN_SPEED * delta)
+		camera_orbit_yaw += CAMERA_TURN_SPEED * delta
+		camera_changed = true
 	if Input.is_key_pressed(KEY_RIGHT):
-		camera.global_rotate(Vector3.UP, -CAMERA_TURN_SPEED * delta)
+		camera_orbit_yaw -= CAMERA_TURN_SPEED * delta
+		camera_changed = true
 	if Input.is_key_pressed(KEY_UP):
-		camera.rotate_object_local(Vector3.RIGHT, CAMERA_TURN_SPEED * delta)
+		camera_orbit_pitch = clamp(camera_orbit_pitch + CAMERA_TURN_SPEED * delta, CAMERA_MIN_PITCH, CAMERA_MAX_PITCH)
+		camera_changed = true
 	if Input.is_key_pressed(KEY_DOWN):
-		camera.rotate_object_local(Vector3.RIGHT, -CAMERA_TURN_SPEED * delta)
+		camera_orbit_pitch = clamp(camera_orbit_pitch - CAMERA_TURN_SPEED * delta, CAMERA_MIN_PITCH, CAMERA_MAX_PITCH)
+		camera_changed = true
+	if camera_changed:
+		_apply_orbit_camera()
+
+
+func _orbit_camera(yaw_delta: float, pitch_delta: float) -> void:
+	camera_orbit_yaw += yaw_delta
+	camera_orbit_pitch = clamp(camera_orbit_pitch + pitch_delta, CAMERA_MIN_PITCH, CAMERA_MAX_PITCH)
+	_apply_orbit_camera()
+
+
+func _sync_orbit_from_camera() -> void:
+	var offset := camera.global_position - camera_focus
+	camera_orbit_distance = max(offset.length(), 0.25)
+	camera_orbit_yaw = atan2(offset.x, offset.z)
+	camera_orbit_pitch = asin(clamp(offset.y / camera_orbit_distance, -1.0, 1.0))
+
+
+func _apply_orbit_camera() -> void:
+	var horizontal_distance := cos(camera_orbit_pitch) * camera_orbit_distance
+	var offset := Vector3(
+		sin(camera_orbit_yaw) * horizontal_distance,
+		sin(camera_orbit_pitch) * camera_orbit_distance,
+		cos(camera_orbit_yaw) * horizontal_distance
+	)
+	camera.global_position = camera_focus + offset
+	camera.look_at(camera_focus, Vector3.UP)
 
 
 func _create_fallback_character() -> void:
@@ -608,7 +665,7 @@ func _update_hud(status: String) -> void:
 		sand_direction_world.z,
 	]
 	events_label.text = "Accumulated Events %d" % accumulator.get_impact_count()
-	asset_label.text = "Asset %s Anim %s Cam WASD+Arrows" % [
+	asset_label.text = "Asset %s Anim %s Cam WASD+Orbit" % [
 		current_asset_name,
 		_short_animation_name() if not String(active_animation_name).is_empty() and animation_enabled else "off",
 	]

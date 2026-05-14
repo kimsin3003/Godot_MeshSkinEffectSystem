@@ -38,8 +38,9 @@ Controls:
 - `1`-`4`: select effect id.
 - Mouse wheel or `[` / `]`: change radius.
 - `-` / `=`: change strength.
-- `W` / `A` / `S` / `D`: move the camera.
-- Arrow keys: rotate the camera.
+- `W` / `A` / `S` / `D`: move the camera orbit focus.
+- Arrow keys: orbit the camera around the character.
+- Middle mouse drag: orbit the camera around the character.
 - `Z` / `X`: move the camera down/up.
 - `P`: toggle character animation playback.
 - `T`: toggle sand wind.
