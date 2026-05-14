@@ -31,7 +31,7 @@
 ```text
 initial path:       hits=8 raycast_ms=98.746 event_ms=3.583  full_ms=102.329
 first optimized:    hits=8 raycast_ms=7.624  event_ms=10.368 full_ms=17.993
-latest benchmark:  hits=8 raycast_ms=7.440  event_ms=0.207  full_ms=7.648
+latest benchmark:  hits=8 raycast_ms=7.588  event_ms=0.222  full_ms=7.811
 ```
 
 명령:
@@ -44,8 +44,24 @@ godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/benchmark_p
 
 - 가장 컸던 병목은 playtest용 visual triangle raycast였다.
 - 중복 skinning attachment resolve를 제거한 뒤 event/splat path는 약 0.2 ms로 내려갔다.
-- 최적화 후에도 click당 약 7.6 ms가 걸리며, 대부분은 exact visual raycast다. 이 수치는 실제 게임 hit path로 받아들이면 안 된다.
+- 최적화 후에도 click당 약 7.8 ms가 걸리며, 대부분은 exact visual raycast다. 이 수치는 실제 게임 hit path로 받아들이면 안 된다.
 - Unreal 게임에서는 physics/collision hit를 입력으로 받고, visual exterior 보정만 별도 proxy에서 수행해야 한다.
+
+누적 scaling 측정:
+
+```text
+impact batches: hits_avg_ms=0.235,0.137,0.144,0.145 for 1/32/128/512 hit batches
+sand before:    sand_step_ms=13.699,43.616,93.483,217.821,227.856,263.155,259.385,259.295
+sand latest:    sand_step_ms=0.847,1.973,4.095,7.166,6.360,1.961,1.860,0.551
+sand frames:    sand_frame_avg_ms=2.280 sand_frame_max_ms=6.119
+```
+
+해석:
+
+- 피격은 누적 개수에 비례해서 느려지지 않는다. Debug event ring은 32개로 제한되고, material은 volume을 O(1)로 샘플한다.
+- 이전 모래 구현은 wind front 뒤의 이미 묻은 sample까지 매 프레임 다시 volume에 썼기 때문에 시간이 갈수록 느려졌다.
+- 현재 Godot 구현은 같은 방향에서는 새로 지나가는 front band만 누적하고, sand sample 수를 4096개 이하로 cap한다.
+- Unreal production에서는 같은 정책을 worker/GPU update budget으로 옮겨야 한다.
 
 ## Runtime 데이터 구조
 

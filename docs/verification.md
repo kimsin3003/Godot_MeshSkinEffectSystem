@@ -17,6 +17,7 @@ godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_anim
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_sand_mask_smoke.gd
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_real_seam_boundary_smoke.gd
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/benchmark_playtest_hit.gd
+godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/benchmark_accumulation_scaling.gd
 ```
 
 ## Real Asset Sources
@@ -51,7 +52,8 @@ godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/benchmark_p
 | Demo renders nonblank with the effect shader | `tests/render_visual_smoke.gd` captures `artifacts/demo_snapshot.png` and asserts enough pixels differ from the background. |
 | Real character renders with visible impact shader | `tests/render_real_asset_smoke.gd` renders Sophia through Vulkan, captures `artifacts/sophia_surface_effects.png`, and checks `non_background=1561`, `impact_samples=432` against `tests/visual_baselines.json`. |
 | Material O(1) impact evaluation | `surface_effects.gdshader` uses `surface_effect_volume` as the default impact path, so fragment cost is fixed layered-volume sampling instead of an event loop. The old array loop remains only behind `use_surface_effect_volume == false`. |
-| Playtest hit performance baseline | `tests/benchmark_playtest_hit.gd` measures the current Godot playtest path. Latest run: `hits=8`, `raycast_ms=7.440`, `event_ms=0.207`, `full_ms=7.648`. The remaining cost is the prototype/editor-style exact visual raycast path, not the intended Unreal GameThread path. |
+| Playtest hit performance baseline | `tests/benchmark_playtest_hit.gd` measures the current Godot playtest path. Latest run: `hits=8`, `raycast_ms=7.588`, `event_ms=0.222`, `full_ms=7.811`. The remaining cost is the prototype/editor-style exact visual raycast path, not the intended Unreal GameThread path. |
+| Accumulation scaling | `tests/benchmark_accumulation_scaling.gd` proves impact cost stays stable as events accumulate (`hits_avg_ms=0.235,0.137,0.144,0.145` for 1/32/128/512 hit batches). Sand now uses an incremental front cursor and capped accumulation samples: latest `sand_frame_avg_ms=2.280`, `sand_frame_max_ms=6.119` on the Quaternius playtest asset. |
 | Animated/skinned deformation attachment | `tests/test_skinned_surface_attachment.gd` attaches an event to a real Sophia triangle, seeks `Run`, and proves the visual triangle moves (`attachment_delta=0.592`) while the rest-space volume sample persists (`rest_alpha=1.000`). `tests/render_animated_real_asset_smoke.gd` checks visible animated impact metrics: `pose_delta=4.658`, `impact_samples=246`. |
 | Runtime vertex deformation attachment | `tests/test_deformed_surface_attachment.gd` uses a deformation provider to resolve a visual hit at `visual_z=0.200`, then mutates the mesh while preserving rest `CUSTOM0`. It proves the visual triangle moved away from rest (`visual_rest_delta=0.200`) while the rest-space volume sample remains (`volume_g=1.000`). |
 | Visual regression | `tests/visual_baseline.gd` and `tests/visual_baselines.json` define metric ranges for synthetic impact, real Sophia impact, animated Sophia impact, sand renders, and real seam-boundary renders. |

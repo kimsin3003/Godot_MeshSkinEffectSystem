@@ -18,6 +18,7 @@ const EMPTY_EFFECT_VOLUME_COLOR := Color(0.0, 0.0, 0.0, 0.0)
 @export var sand_front_softness := 0.45
 @export var minimum_splat_voxel_span := 1.25
 @export var max_effect_volume_layer_uploads_per_frame := 2
+@export var max_sand_accumulation_samples := 4096
 @export var shader: Shader = preload("res://shaders/surface_effects.gdshader")
 
 var sampler := MeshSurfaceSampler.new()
@@ -41,6 +42,10 @@ var total_surface_event_count := 0
 var sand_direction_world := Vector3(1, 0, 0)
 var sand_front := -10.0
 var sand_amount := 0.0
+var has_sand_accumulation_cursor := false
+var sand_accumulation_direction_world := Vector3.ZERO
+var sand_accumulated_front := -INF
+var sand_accumulated_amount := 0.0
 var has_synced_character_transform := false
 var last_synced_character_transform := Transform3D.IDENTITY
 
@@ -101,6 +106,7 @@ func clear_impacts() -> void:
 	impact_cursor = 0
 	total_surface_event_count = 0
 	effect_volume_dirty = true
+	_reset_sand_accumulation_cursor()
 	_rebuild_effect_volume()
 	_sync_event_uniform_params()
 
@@ -381,7 +387,18 @@ func set_sand_state(direction_world: Vector3, front: float, amount: float) -> vo
 	sand_front = front
 	sand_amount = next_amount
 	if sand_amount > 0.0:
-		_accumulate_sand_to_effect_volume()
+		var full_accumulation := (
+			not has_sand_accumulation_cursor
+			or sand_direction_world.distance_squared_to(sand_accumulation_direction_world) > 0.000001
+			or sand_front < sand_accumulated_front - 0.000001
+			or sand_amount > sand_accumulated_amount + 0.000001
+		)
+		var min_travel := -INF if full_accumulation else sand_accumulated_front
+		_accumulate_sand_to_effect_volume(min_travel)
+		has_sand_accumulation_cursor = true
+		sand_accumulation_direction_world = sand_direction_world
+		sand_accumulated_front = sand_front
+		sand_accumulated_amount = max(sand_accumulated_amount, sand_amount)
 	_sync_sand_params()
 
 
@@ -699,7 +716,7 @@ func _splat_effect_to_volume(effect_id: int, center: Vector3, radius: float, str
 		_write_effect_volume_sample(effect_id, center, clamped_strength)
 
 
-func _accumulate_sand_to_effect_volume() -> void:
+func _accumulate_sand_to_effect_volume(min_travel: float = -INF) -> void:
 	if character_root == null or effect_volume_texture == null or effect_volume_layer_data.is_empty():
 		return
 	if sampler.local_positions.is_empty():
@@ -711,10 +728,15 @@ func _accumulate_sand_to_effect_volume() -> void:
 
 	effect_volume_dirty_layers.clear()
 	var to_world_basis: Basis = character_root.global_transform.basis
-	for sample_index in sampler.local_positions.size():
+	var max_travel := sand_front + sand_front_softness
+	var sample_stride := _sand_sample_stride()
+	for sample_index in range(0, sampler.local_positions.size(), sample_stride):
 		var local_position: Vector3 = sampler.local_positions[sample_index]
 		var world_position: Vector3 = character_root.to_global(local_position)
 		var travel: float = world_position.dot(direction_world)
+		if travel < min_travel or travel > max_travel:
+			continue
+
 		var front_mask: float = 1.0 - _smoothstep(sand_front, sand_front + sand_front_softness, travel)
 		if front_mask <= 0.0:
 			continue
@@ -725,10 +747,23 @@ func _accumulate_sand_to_effect_volume() -> void:
 		if mask <= 0.01:
 			continue
 
-		_write_effect_volume_sample(EFFECT_SAND_ID, local_position, mask, 1)
+		_write_effect_volume_sample(EFFECT_SAND_ID, local_position, mask)
 
 	_queue_dirty_effect_volume_layers()
 	effect_volume_dirty = false
+
+
+func _reset_sand_accumulation_cursor() -> void:
+	has_sand_accumulation_cursor = false
+	sand_accumulation_direction_world = Vector3.ZERO
+	sand_accumulated_front = -INF
+	sand_accumulated_amount = 0.0
+
+
+func _sand_sample_stride() -> int:
+	if max_sand_accumulation_samples <= 0:
+		return 1
+	return max(1, int(ceil(float(sampler.local_positions.size()) / float(max_sand_accumulation_samples))))
 
 
 func _write_effect_volume_sample(effect_id: int, local_position: Vector3, strength: float, voxel_radius: int = 0) -> void:
