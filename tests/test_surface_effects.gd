@@ -85,7 +85,7 @@ func _test_multi_material_slot_binding() -> void:
 		var material := split_shell.get_surface_override_material(surface_index)
 		_assert(material.get_shader_parameter("impact_count") == 1, "impact state was not shared across slots")
 		_assert(material.get_shader_parameter("use_surface_effect_volume"), "O(1) volume path was not enabled")
-		_assert(material.get_shader_parameter("surface_effect_volume") is ImageTexture3D, "surface effect volume was not bound")
+		_assert(material.get_shader_parameter("surface_effect_volume") is Texture2DArray, "surface effect volume was not bound")
 
 	var volume_sample := accumulator.sample_effect_volume_local(resolved_local)
 	_assert(volume_sample.r > 0.1, "impact was not accumulated into the O(1) volume")

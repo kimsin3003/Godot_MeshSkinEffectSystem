@@ -33,7 +33,7 @@ UV 대신 character-local/rest-space 좌표에서 효과를 관리한다.
 기본 path는 material fragment에서 O(1)이다.
 
 - `use_surface_effect_volume`: true이면 shared 3D volume path 사용
-- `surface_effect_volume`: RGBA8 3D texture. R/G/B/A는 effect class 1/2/3/4 누적 mask
+- `surface_effect_volume`: RGBA8 layered volume texture. R/G/B/A는 effect class 1/2/3/4 누적 mask
 - `effect_volume_origin_local`: volume 시작점, character local
 - `effect_volume_inv_size`: character local 위치를 volume UVW로 바꾸는 inverse size
 - `use_rest_volume_position`: true이면 shader가 `CUSTOM0.rgb` rest position으로 volume sample
@@ -56,7 +56,7 @@ UV 대신 character-local/rest-space 좌표에서 효과를 관리한다.
 
 - sparse surface samples: position/normal 배열
 - debug event ring: 32개 record에 해당하는 uniform 배열
-- shared 48^3 RGBA8 volume: 약 432 KB
+- shared 48-layer RGBA8 volume: 약 432 KB
 - Godot rest-space attribute: `CUSTOM0` RGBA float, vertex당 16 bytes
 
 현재 검증 asset은 1 MB 아래에 있다.

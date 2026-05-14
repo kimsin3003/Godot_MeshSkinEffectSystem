@@ -36,6 +36,7 @@ var sand_amount := 0.85
 var animation_enabled := true
 var animation_players: Array[AnimationPlayer] = []
 var active_animation_name := ""
+var raycast_surfaces: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -138,6 +139,7 @@ func _load_asset(asset_index: int) -> void:
 	_play_first_animation()
 	accumulator.rebuild_for_character(character_root)
 	radius_m = clamp(radius_m, _minimum_radius_m(), MAX_RADIUS_M)
+	_rebuild_raycast_surfaces()
 	_apply_test_palette()
 
 
@@ -246,11 +248,48 @@ func _aabb_corners(bounds: AABB) -> Array[Vector3]:
 
 
 func _raycast_visual_mesh(ray_origin: Vector3, ray_dir: Vector3) -> Dictionary:
-	var meshes: Array[MeshInstance3D] = []
-	_collect_meshes(character_root, meshes)
-
 	var best := {}
 	var best_t := INF
+	for surface_record in raycast_surfaces:
+		var mesh_instance: MeshInstance3D = surface_record["mesh_instance"]
+		if not is_instance_valid(mesh_instance):
+			continue
+		var local_bounds: AABB = surface_record["local_bounds"]
+		if not _ray_intersects_local_bounds(ray_origin, ray_dir, mesh_instance, local_bounds):
+			continue
+
+		var surface_index: int = surface_record["surface_index"]
+		var arrays: Array = surface_record["arrays"]
+		var vertices: PackedVector3Array = surface_record["vertices"]
+		var indices: PackedInt32Array = surface_record["indices"]
+		var world_vertices := _resolve_surface_vertices_world(mesh_instance, arrays, surface_index)
+
+		var triangle_count := indices.size() / 3 if not indices.is_empty() else vertices.size() / 3
+		for triangle_index in triangle_count:
+			var i0 := indices[triangle_index * 3] if not indices.is_empty() else triangle_index * 3
+			var i1 := indices[triangle_index * 3 + 1] if not indices.is_empty() else triangle_index * 3 + 1
+			var i2 := indices[triangle_index * 3 + 2] if not indices.is_empty() else triangle_index * 3 + 2
+			var v0 := world_vertices[i0]
+			var v1 := world_vertices[i1]
+			var v2 := world_vertices[i2]
+			var t := _intersect_ray_triangle(ray_origin, ray_dir, v0, v1, v2)
+			if t > 0.0 and t < best_t:
+				best_t = t
+				best = {
+					"position": ray_origin + ray_dir * t,
+					"mesh": mesh_instance.name,
+					"mesh_instance": mesh_instance,
+					"surface": surface_index,
+					"triangle_indices": PackedInt32Array([i0, i1, i2]),
+					"barycentric": _triangle_barycentric(ray_origin + ray_dir * t, v0, v1, v2),
+				}
+	return best
+
+
+func _rebuild_raycast_surfaces() -> void:
+	raycast_surfaces.clear()
+	var meshes: Array[MeshInstance3D] = []
+	_collect_meshes(character_root, meshes)
 	for mesh_instance in meshes:
 		var mesh := mesh_instance.mesh
 		if mesh == null:
@@ -260,31 +299,83 @@ func _raycast_visual_mesh(ray_origin: Vector3, ray_dir: Vector3) -> Dictionary:
 			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 			if vertices.is_empty():
 				continue
-
 			var indices := PackedInt32Array()
 			if arrays[Mesh.ARRAY_INDEX] is PackedInt32Array:
 				indices = arrays[Mesh.ARRAY_INDEX]
+			raycast_surfaces.append({
+				"mesh_instance": mesh_instance,
+				"surface_index": surface_index,
+				"arrays": arrays,
+				"vertices": vertices,
+				"indices": indices,
+				"local_bounds": _bounds_from_vertices(vertices),
+			})
 
-			var triangle_count := indices.size() / 3 if not indices.is_empty() else vertices.size() / 3
-			for triangle_index in triangle_count:
-				var i0 := indices[triangle_index * 3] if not indices.is_empty() else triangle_index * 3
-				var i1 := indices[triangle_index * 3 + 1] if not indices.is_empty() else triangle_index * 3 + 1
-				var i2 := indices[triangle_index * 3 + 2] if not indices.is_empty() else triangle_index * 3 + 2
-				var v0 := accumulator.resolve_vertex_world(mesh_instance, arrays, i0, surface_index)
-				var v1 := accumulator.resolve_vertex_world(mesh_instance, arrays, i1, surface_index)
-				var v2 := accumulator.resolve_vertex_world(mesh_instance, arrays, i2, surface_index)
-				var t := _intersect_ray_triangle(ray_origin, ray_dir, v0, v1, v2)
-				if t > 0.0 and t < best_t:
-					best_t = t
-					best = {
-						"position": ray_origin + ray_dir * t,
-						"mesh": mesh_instance.name,
-						"mesh_instance": mesh_instance,
-						"surface": surface_index,
-						"triangle_indices": PackedInt32Array([i0, i1, i2]),
-						"barycentric": _triangle_barycentric(ray_origin + ray_dir * t, v0, v1, v2),
-					}
-	return best
+
+func _bounds_from_vertices(vertices: PackedVector3Array) -> AABB:
+	var bounds := AABB(vertices[0], Vector3.ZERO)
+	for vertex_index in range(1, vertices.size()):
+		bounds = bounds.expand(vertices[vertex_index])
+	return bounds
+
+
+func _resolve_surface_vertices_world(
+	mesh_instance: MeshInstance3D,
+	arrays: Array,
+	surface_index: int
+) -> PackedVector3Array:
+	return accumulator.resolve_surface_vertices_world(mesh_instance, arrays, surface_index)
+
+
+func _ray_intersects_local_bounds(
+	ray_origin: Vector3,
+	ray_dir: Vector3,
+	mesh_instance: MeshInstance3D,
+	local_bounds: AABB
+) -> bool:
+	var bounds := AABB()
+	var has_bounds := false
+	for corner in _aabb_corners(local_bounds):
+		var world_corner := mesh_instance.to_global(corner)
+		if not has_bounds:
+			bounds = AABB(world_corner, Vector3.ZERO)
+			has_bounds = true
+		else:
+			bounds = bounds.expand(world_corner)
+
+	if not has_bounds:
+		return false
+	return _ray_intersects_aabb(ray_origin, ray_dir, bounds.grow(0.25))
+
+
+func _ray_intersects_aabb(ray_origin: Vector3, ray_dir: Vector3, bounds: AABB) -> bool:
+	var t_min := -INF
+	var t_max := INF
+	var bounds_min := bounds.position
+	var bounds_max := bounds.end
+
+	for axis in 3:
+		var origin_axis: float = ray_origin[axis]
+		var dir_axis: float = ray_dir[axis]
+		var min_axis: float = bounds_min[axis]
+		var max_axis: float = bounds_max[axis]
+		if abs(dir_axis) < 0.000001:
+			if origin_axis < min_axis or origin_axis > max_axis:
+				return false
+			continue
+
+		var t1 := (min_axis - origin_axis) / dir_axis
+		var t2 := (max_axis - origin_axis) / dir_axis
+		if t1 > t2:
+			var temp := t1
+			t1 = t2
+			t2 = temp
+		t_min = max(t_min, t1)
+		t_max = min(t_max, t2)
+		if t_min > t_max:
+			return false
+
+	return t_max >= max(t_min, 0.0)
 
 
 func _intersect_ray_triangle(origin: Vector3, dir: Vector3, v0: Vector3, v1: Vector3, v2: Vector3) -> float:

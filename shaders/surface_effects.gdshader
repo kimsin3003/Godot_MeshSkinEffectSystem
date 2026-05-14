@@ -34,7 +34,8 @@ uniform vec4 impact_spheres[MAX_IMPACTS];
 uniform vec4 impact_dirs[MAX_IMPACTS];
 uniform vec4 impact_meta[MAX_IMPACTS];
 uniform bool use_surface_effect_volume = false;
-uniform sampler3D surface_effect_volume;
+uniform sampler2DArray surface_effect_volume;
+uniform float effect_volume_depth = 48.0;
 uniform bool use_rest_volume_position = false;
 uniform vec3 effect_volume_origin_local = vec3(-1.0, -1.0, -1.0);
 uniform vec3 effect_volume_inv_size = vec3(0.5, 0.5, 0.5);
@@ -101,7 +102,13 @@ vec4 surface_event_volume_mask(vec3 pos) {
 	) {
 		return vec4(blood_color.rgb, 0.0);
 	}
-	return color_from_effect_masks(texture(surface_effect_volume, uvw));
+	float layer = clamp(uvw.z, 0.0, 1.0) * max(effect_volume_depth - 1.0, 0.0);
+	float layer0 = floor(layer);
+	float layer1 = min(layer0 + 1.0, effect_volume_depth - 1.0);
+	float layer_t = fract(layer);
+	vec4 masks0 = texture(surface_effect_volume, vec3(uvw.xy, layer0));
+	vec4 masks1 = texture(surface_effect_volume, vec3(uvw.xy, layer1));
+	return color_from_effect_masks(mix(masks0, masks1, layer_t));
 }
 
 
