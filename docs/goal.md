@@ -84,3 +84,14 @@ UV 대신 character-local/rest-space 좌표에서 효과를 관리한다.
 - sand accumulation은 CPU surface sample 기반이므로 대규모 캐릭터/다수 캐릭터에서는 GPU compute나 더 압축된 update path가 필요하다.
 - RGBA volume은 독립 effect class 4개만 직접 표현한다. 더 많은 독립 스타일은 추가 volume, channel packing, indirection table이 필요하다.
 - material preservation은 현재 사용하는 `StandardMaterial3D` 주요 채널을 대상으로 검증했다.
+
+## Unreal 구현으로 가져갈 결론
+
+- Event list는 장기 상태가 아니라 입력/디버그 buffer다. 누적 결과는 rest/pre-skinned local volume에 저장한다.
+- Material 기본 경로는 `PreSkinnedLocalPosition` 기반 volume sample이어야 하며, event 개수만큼 loop를 돌면 안 된다.
+- 40만 vertex 캐릭터에서는 Godot처럼 float4 `CUSTOM0`를 추가하면 memory budget을 크게 넘는다.
+- Physics hit는 shot direction 기준 visual outer layer로 보정해야 하지만, GameThread에서 전체 visual mesh를 매번 스캔하면 안 된다.
+- Clothing swap/runtime mesh rebuild마다 proxy, volume, generation id를 다시 만들고 이전 worker 결과는 폐기해야 한다.
+- Tiny bullet mark가 반드시 원형이어야 하면 coarse volume만으로는 부족할 수 있다. 이 경우 short-lived high-resolution stamp나 제한된 recent event decal path를 volume과 함께 쓴다.
+
+자세한 Unreal 포팅 기준은 `docs/unreal_implementation_notes.md`에 정리했다.

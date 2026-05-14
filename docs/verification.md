@@ -16,6 +16,7 @@ godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_real
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_animated_real_asset_smoke.gd
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_sand_mask_smoke.gd
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_real_seam_boundary_smoke.gd
+godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/benchmark_playtest_hit.gd
 ```
 
 ## Real Asset Sources
@@ -50,6 +51,7 @@ godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_real
 | Demo renders nonblank with the effect shader | `tests/render_visual_smoke.gd` captures `artifacts/demo_snapshot.png` and asserts enough pixels differ from the background. |
 | Real character renders with visible impact shader | `tests/render_real_asset_smoke.gd` renders Sophia through Vulkan, captures `artifacts/sophia_surface_effects.png`, and checks `non_background=1561`, `impact_samples=432` against `tests/visual_baselines.json`. |
 | Material O(1) impact evaluation | `surface_effects.gdshader` uses `surface_effect_volume` as the default impact path, so fragment cost is fixed layered-volume sampling instead of an event loop. The old array loop remains only behind `use_surface_effect_volume == false`. |
+| Playtest hit performance baseline | `tests/benchmark_playtest_hit.gd` measures the current Godot playtest path. Latest run: `hits=8`, `raycast_ms=7.624`, `event_ms=10.368`, `full_ms=17.993`. This is still a prototype/editor-style exact visual raycast path, not the intended Unreal GameThread path. |
 | Animated/skinned deformation attachment | `tests/test_skinned_surface_attachment.gd` attaches an event to a real Sophia triangle, seeks `Run`, and proves the visual triangle moves (`attachment_delta=0.592`) while the rest-space volume sample persists (`rest_alpha=1.000`). `tests/render_animated_real_asset_smoke.gd` checks visible animated impact metrics: `pose_delta=4.658`, `impact_samples=246`. |
 | Runtime vertex deformation attachment | `tests/test_deformed_surface_attachment.gd` uses a deformation provider to resolve a visual hit at `visual_z=0.200`, then mutates the mesh while preserving rest `CUSTOM0`. It proves the visual triangle moved away from rest (`visual_rest_delta=0.200`) while the rest-space volume sample remains (`volume_g=1.000`). |
 | Visual regression | `tests/visual_baseline.gd` and `tests/visual_baselines.json` define metric ranges for synthetic impact, real Sophia impact, animated Sophia impact, sand renders, and real seam-boundary renders. |
@@ -59,6 +61,8 @@ godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_real
 - The demo is a Godot prototype, not a production rendering module.
 - The rest-space `CUSTOM0` path is too expensive for a 400k-vertex character under a 1 MB budget. Unreal should use an engine-provided pre-skinned/rest-position semantic or a compressed custom stream.
 - CPU sample-based sand accumulation is suitable for validating the data model; production should move this to a GPU/compute or tighter update path for many characters.
+- Godot currently does not implement the production worker/render-thread split. `docs/unreal_implementation_notes.md` defines the intended Unreal boundary: GameThread captures input/snapshot, WorkerThread resolves/splats CPU state, RenderThread/RHI uploads dirty texture regions.
 - The O(1) volume path currently exposes four accumulated effect classes through RGBA. More independently styled effect classes need more volume channels/textures or a packed representation.
+- Tiny bullet marks can alias or stretch at 48^3 resolution. The current prototype clamps the radius by `minimum_splat_voxel_span`; production may need higher-resolution local stamps or a hybrid decal path for very small circular marks.
 - Material preservation covers common `StandardMaterial3D` texture/value channels, but exact parity with every Godot material feature is not claimed.
 - Visual regression uses metric baselines, not exact pixel-for-pixel golden image comparison.

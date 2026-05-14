@@ -11,6 +11,7 @@ For animation/deformation, the Godot prototype injects character-local rest posi
 See `docs/goal.md` for the translated feature goal and implementation constraints.
 See `docs/verification.md` for the current requirement-to-test matrix.
 See `docs/completion_criteria.md` for the stricter completion gate.
+See `docs/unreal_implementation_notes.md` for the Unreal port architecture, threading boundaries, and production caveats.
 
 ## Real Character Assets
 
@@ -64,6 +65,7 @@ godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_real
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_animated_real_asset_smoke.gd
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_sand_mask_smoke.gd
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_real_seam_boundary_smoke.gd
+godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/benchmark_playtest_hit.gd
 ```
 
 The render tests compare tracked metrics against `tests/visual_baselines.json`; they are not just nonblank smoke captures.

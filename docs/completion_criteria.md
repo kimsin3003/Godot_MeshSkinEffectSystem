@@ -21,6 +21,8 @@ The work can only be treated as complete when every item below has direct eviden
 | Sand direction front | A rendered or numeric test must prove sand appears from the configured wind/front direction over time. |
 | Normal-angle sand attenuation | A test must prove surfaces parallel to wind receive less sand than perpendicular surfaces. |
 | Material O(1) evaluation | The default material path must not loop over event count per fragment. |
+| Production threading | Expensive visual exterior search, sand accumulation, and texture upload work must not block the GameThread at production character scale. |
+| Hit shape quality | The chosen representation must define the smallest supported hit radius and prove visual quality at that radius. |
 | Material preservation | The adapter must preserve at least albedo, normal, roughness/ORM, and alpha behavior needed by the source material set. |
 | Animation/skinning/deformation | Triangle-attached effects must remain on skinned/deformed surfaces. |
 | Visual regression | Rendered smoke tests must include real characters and should fail if impact/sand masks disappear. |
@@ -56,3 +58,5 @@ Still incomplete for production:
 - The current Godot rest-coordinate implementation uses float4 `CUSTOM0`, which is valid for the included validation assets but exceeds the 1 MB budget for a 400k-vertex character.
 - Production-scale Unreal implementation should use `PreSkinnedLocalPosition` or an equivalent compressed/rest-position path instead of adding 16 bytes per vertex.
 - CPU sample-based sand accumulation should be replaced or optimized for many high-density characters.
+- Production Unreal work still needs a worker/render-thread implementation and dirty 3D texture upload path.
+- 48^3 volume resolution is not enough to guarantee tiny perfectly circular hit marks on every surface angle; the supported minimum radius or hybrid stamp path must be chosen in Unreal.
