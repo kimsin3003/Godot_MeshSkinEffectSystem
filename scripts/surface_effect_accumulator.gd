@@ -20,6 +20,7 @@ const REST_VOLUME_META := "_surface_effect_rest_volume"
 @export var minimum_splat_voxel_span := 1.25
 @export var max_effect_volume_layer_uploads_per_frame := 2
 @export var max_sand_accumulation_samples := 4096
+@export var sand_voxel_radius := 1
 @export var sand_exposure_cell_size := 0.08
 @export var sand_exposure_depth := 0.12
 @export var shader: Shader = preload("res://shaders/surface_effects.gdshader")
@@ -764,7 +765,7 @@ func _accumulate_sand_to_effect_volume(min_travel: float = -INF) -> void:
 		if mask <= 0.01:
 			continue
 
-		_write_effect_volume_sample(EFFECT_SAND_ID, local_position, mask)
+		_write_effect_volume_brush(EFFECT_SAND_ID, local_position, mask, sand_voxel_radius)
 
 	_queue_dirty_effect_volume_layers()
 	effect_volume_dirty = false
@@ -864,6 +865,69 @@ func _write_effect_volume_sample(effect_id: int, local_position: Vector3, streng
 			for write_x in range(min_x, max_x + 1):
 				_write_effect_volume_byte(write_x, write_y, write_z, channel, mask)
 				effect_volume_dirty_layers[write_z] = true
+
+
+func _write_effect_volume_brush(effect_id: int, local_position: Vector3, strength: float, voxel_radius: int) -> void:
+	var radius: int = maxi(0, voxel_radius)
+	if radius <= 0:
+		_write_effect_volume_sample(effect_id, local_position, strength)
+		return
+
+	var uvw := _local_to_effect_volume_uv(local_position)
+	if uvw.x < 0.0 or uvw.x > 1.0 or uvw.y < 0.0 or uvw.y > 1.0 or uvw.z < 0.0 or uvw.z > 1.0:
+		return
+
+	var resolution := _clamped_effect_volume_resolution()
+	var center_grid := Vector3(
+		uvw.x * float(resolution) - 0.5,
+		uvw.y * float(resolution) - 0.5,
+		uvw.z * float(resolution) - 0.5
+	)
+	var center_x := clampi(int(round(center_grid.x)), 0, resolution - 1)
+	var center_y := clampi(int(round(center_grid.y)), 0, resolution - 1)
+	var center_z := clampi(int(round(center_grid.z)), 0, resolution - 1)
+	var channel := _effect_volume_channel(effect_id)
+
+	if radius == 1:
+		_write_effect_volume_byte(center_x, center_y, center_z, channel, clamp(strength, 0.0, 1.0))
+		effect_volume_dirty_layers[center_z] = true
+		var neighbor_mask: float = clamp(strength * 0.45, 0.0, 1.0)
+		_write_effect_volume_neighbor(center_x - 1, center_y, center_z, channel, neighbor_mask, resolution)
+		_write_effect_volume_neighbor(center_x + 1, center_y, center_z, channel, neighbor_mask, resolution)
+		_write_effect_volume_neighbor(center_x, center_y - 1, center_z, channel, neighbor_mask, resolution)
+		_write_effect_volume_neighbor(center_x, center_y + 1, center_z, channel, neighbor_mask, resolution)
+		_write_effect_volume_neighbor(center_x, center_y, center_z - 1, channel, neighbor_mask, resolution)
+		_write_effect_volume_neighbor(center_x, center_y, center_z + 1, channel, neighbor_mask, resolution)
+		return
+
+	var min_x := clampi(center_x - radius, 0, resolution - 1)
+	var max_x := clampi(center_x + radius, 0, resolution - 1)
+	var min_y := clampi(center_y - radius, 0, resolution - 1)
+	var max_y := clampi(center_y + radius, 0, resolution - 1)
+	var min_z := clampi(center_z - radius, 0, resolution - 1)
+	var max_z := clampi(center_z + radius, 0, resolution - 1)
+	var max_distance := float(radius) + 0.65
+
+	for write_z in range(min_z, max_z + 1):
+		for write_y in range(min_y, max_y + 1):
+			for write_x in range(min_x, max_x + 1):
+				var voxel_grid := Vector3(float(write_x), float(write_y), float(write_z))
+				var distance := voxel_grid.distance_to(center_grid)
+				if distance > max_distance:
+					continue
+				var falloff: float = 1.0 - _smoothstep(0.0, max_distance, distance)
+				var mask: float = clamp(strength * falloff, 0.0, 1.0)
+				if mask <= 0.0:
+					continue
+				_write_effect_volume_byte(write_x, write_y, write_z, channel, mask)
+				effect_volume_dirty_layers[write_z] = true
+
+
+func _write_effect_volume_neighbor(x: int, y: int, z: int, channel: int, mask: float, resolution: int) -> void:
+	if x < 0 or x >= resolution or y < 0 or y >= resolution or z < 0 or z >= resolution:
+		return
+	_write_effect_volume_byte(x, y, z, channel, mask)
+	effect_volume_dirty_layers[z] = true
 
 
 func _write_effect_volume_byte(x: int, y: int, z: int, channel: int, mask: float) -> void:
