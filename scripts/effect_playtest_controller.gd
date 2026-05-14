@@ -46,6 +46,7 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_update_camera_controls(delta)
+	_ensure_animation_playback()
 
 	if sand_enabled:
 		sand_front += sand_speed * delta
@@ -348,6 +349,7 @@ func _play_first_animation() -> void:
 			continue
 
 		active_animation_name = _choose_animation(animation_list)
+		_set_animation_loop(player, active_animation_name)
 		player.play(active_animation_name)
 		player.advance(0.0)
 		_set_animation_enabled(animation_enabled)
@@ -365,6 +367,24 @@ func _choose_animation(animation_list: PackedStringArray) -> StringName:
 func _set_animation_enabled(enabled: bool) -> void:
 	for player in animation_players:
 		player.speed_scale = 1.0 if enabled else 0.0
+
+
+func _set_animation_loop(player: AnimationPlayer, animation_name: StringName) -> void:
+	var animation := player.get_animation(animation_name)
+	if animation == null:
+		return
+	animation.loop_mode = Animation.LOOP_LINEAR
+
+
+func _ensure_animation_playback() -> void:
+	if not animation_enabled or String(active_animation_name).is_empty():
+		return
+
+	for player in animation_players:
+		if player.is_playing():
+			continue
+		player.play(active_animation_name)
+		player.speed_scale = 1.0
 
 
 func _update_camera_controls(delta: float) -> void:
