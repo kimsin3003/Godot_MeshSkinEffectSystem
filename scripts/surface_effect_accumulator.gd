@@ -41,6 +41,8 @@ var total_surface_event_count := 0
 var sand_direction_world := Vector3(1, 0, 0)
 var sand_front := -10.0
 var sand_amount := 0.0
+var has_synced_character_transform := false
+var last_synced_character_transform := Transform3D.IDENTITY
 
 
 func _ready() -> void:
@@ -51,8 +53,7 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if character_root != null and not shader_materials.is_empty():
 		_flush_pending_effect_volume_layers(max_effect_volume_layer_uploads_per_frame)
-		_sync_impact_params()
-		_sync_transform_params()
+		_sync_transform_params_if_needed()
 
 
 func rebuild_for_character(root: Node3D) -> void:
@@ -101,7 +102,7 @@ func clear_impacts() -> void:
 	total_surface_event_count = 0
 	effect_volume_dirty = true
 	_rebuild_effect_volume()
-	_sync_impact_params()
+	_sync_event_uniform_params()
 
 
 func add_impact(
@@ -163,7 +164,9 @@ func add_surface_effect_at_triangle(
 	barycentric: Vector3,
 	effect_direction_world: Vector3,
 	radius_m: float = impact_radius_m,
-	strength: float = 1.0
+	strength: float = 1.0,
+	visual_hit_world_override: Variant = null,
+	rest_center_local_override: Variant = null
 ) -> Vector3:
 	if character_root == null or mesh_instance == null or triangle_indices.size() != 3:
 		return Vector3.ZERO
@@ -178,8 +181,18 @@ func add_surface_effect_at_triangle(
 		"triangle_indices": PackedInt32Array(triangle_indices),
 		"barycentric": barycentric,
 	}
-	var visual_hit_world := _resolve_attachment_world(attachment)
-	var rest_center_local: Vector3 = _resolve_attachment_rest_local(attachment)
+	var visual_hit_world: Vector3
+	if visual_hit_world_override is Vector3:
+		visual_hit_world = visual_hit_world_override
+	else:
+		visual_hit_world = _resolve_attachment_world(attachment)
+
+	var rest_center_local: Vector3
+	if rest_center_local_override is Vector3:
+		rest_center_local = rest_center_local_override
+	else:
+		rest_center_local = _resolve_attachment_rest_local(attachment)
+
 	_store_surface_event_local(
 		effect_id,
 		rest_center_local,
@@ -207,7 +220,8 @@ func resolve_vertex_world(
 func resolve_surface_vertices_world(
 	mesh_instance: MeshInstance3D,
 	arrays: Array,
-	surface_index: int = -1
+	surface_index: int = -1,
+	pose_cache: Variant = null
 ) -> PackedVector3Array:
 	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	var world_vertices := PackedVector3Array()
@@ -251,10 +265,19 @@ func resolve_surface_vertices_world(
 		bind_bone_indices[bind_index] = _resolve_skin_bone_index(mesh_instance.skin, skeleton, bind_index)
 		bind_poses[bind_index] = mesh_instance.skin.get_bind_pose(bind_index)
 
-	var bone_poses: Array[Transform3D] = []
-	bone_poses.resize(skeleton.get_bone_count())
-	for bone_index in skeleton.get_bone_count():
-		bone_poses[bone_index] = skeleton.get_bone_global_pose(bone_index)
+	var effective_pose_cache: Dictionary = {}
+	if pose_cache is Dictionary:
+		effective_pose_cache = pose_cache
+
+	var skeleton_id := skeleton.get_instance_id()
+	var bone_poses: Array = []
+	if effective_pose_cache.has(skeleton_id):
+		bone_poses = effective_pose_cache[skeleton_id]
+	else:
+		bone_poses.resize(skeleton.get_bone_count())
+		for bone_index in skeleton.get_bone_count():
+			bone_poses[bone_index] = skeleton.get_bone_global_pose(bone_index)
+		effective_pose_cache[skeleton_id] = bone_poses
 
 	for vertex_index in vertices.size():
 		var base_position := vertices[vertex_index]
@@ -274,7 +297,8 @@ func resolve_surface_vertices_world(
 			var resolved_bone_index := bind_bone_indices[bind_index]
 			if resolved_bone_index < 0 or resolved_bone_index >= bone_poses.size():
 				continue
-			skeleton_local += (bone_poses[resolved_bone_index] * (bind_poses[bind_index] * base_position)) * weight
+			var bone_pose: Transform3D = bone_poses[resolved_bone_index]
+			skeleton_local += (bone_pose * (bind_poses[bind_index] * base_position)) * weight
 			total_weight += weight
 
 		if total_weight <= 0.0001:
@@ -333,7 +357,7 @@ func _store_surface_event_local(
 
 	_rebuild_event_uniform_arrays()
 	_splat_record_to_effect_volume(record)
-	_sync_impact_params()
+	_sync_event_uniform_params()
 
 
 func _effective_splat_radius(radius_m: float) -> float:
@@ -341,10 +365,21 @@ func _effective_splat_radius(radius_m: float) -> float:
 
 
 func set_sand_state(direction_world: Vector3, front: float, amount: float) -> void:
+	var next_direction: Vector3 = sand_direction_world
 	if direction_world.length_squared() > 0.000001:
-		sand_direction_world = direction_world.normalized()
+		next_direction = direction_world.normalized()
+	var next_amount: float = clamp(amount, 0.0, 1.0)
+	var changed: bool = (
+		next_direction.distance_squared_to(sand_direction_world) > 0.000001
+		or abs(front - sand_front) > 0.000001
+		or abs(next_amount - sand_amount) > 0.000001
+	)
+	if not changed:
+		return
+
+	sand_direction_world = next_direction
 	sand_front = front
-	sand_amount = clamp(amount, 0.0, 1.0)
+	sand_amount = next_amount
 	if sand_amount > 0.0:
 		_accumulate_sand_to_effect_volume()
 	_sync_sand_params()
@@ -437,25 +472,40 @@ func _set_optional_texture(
 
 func _sync_all_shader_params() -> void:
 	_sync_transform_params()
-	_sync_impact_params()
+	_sync_surface_effect_resource_params()
+	_sync_event_uniform_params()
 	_sync_sand_params()
+
+
+func _sync_transform_params_if_needed() -> void:
+	var character_transform := Transform3D.IDENTITY
+	if character_root != null:
+		character_transform = character_root.global_transform
+	if has_synced_character_transform and character_transform == last_synced_character_transform:
+		return
+	_sync_transform_params()
 
 
 func _sync_transform_params() -> void:
 	var character_inverse_world := Transform3D.IDENTITY
 	if character_root != null:
 		character_inverse_world = character_root.global_transform.affine_inverse()
+		last_synced_character_transform = character_root.global_transform
+	else:
+		last_synced_character_transform = Transform3D.IDENTITY
+	has_synced_character_transform = true
 
 	for material in shader_materials:
 		material.set_shader_parameter("character_inverse_world", character_inverse_world)
 
 
 func _sync_impact_params() -> void:
+	_sync_surface_effect_resource_params()
+	_sync_event_uniform_params()
+
+
+func _sync_surface_effect_resource_params() -> void:
 	for material in shader_materials:
-		material.set_shader_parameter("impact_count", impact_spheres.size())
-		material.set_shader_parameter("impact_spheres", impact_spheres)
-		material.set_shader_parameter("impact_dirs", impact_dirs)
-		material.set_shader_parameter("impact_meta", impact_meta)
 		material.set_shader_parameter("use_surface_effect_volume", effect_volume_texture != null)
 		if effect_volume_texture != null:
 			material.set_shader_parameter("surface_effect_volume", effect_volume_texture)
@@ -463,6 +513,14 @@ func _sync_impact_params() -> void:
 		material.set_shader_parameter("use_rest_volume_position", use_rest_volume_attributes and rest_attribute_vertex_count > 0)
 		material.set_shader_parameter("effect_volume_origin_local", effect_volume_origin_local)
 		material.set_shader_parameter("effect_volume_inv_size", effect_volume_inv_size)
+
+
+func _sync_event_uniform_params() -> void:
+	for material in shader_materials:
+		material.set_shader_parameter("impact_count", impact_spheres.size())
+		material.set_shader_parameter("impact_spheres", impact_spheres)
+		material.set_shader_parameter("impact_dirs", impact_dirs)
+		material.set_shader_parameter("impact_meta", impact_meta)
 
 
 func _rebuild_event_uniform_arrays() -> void:

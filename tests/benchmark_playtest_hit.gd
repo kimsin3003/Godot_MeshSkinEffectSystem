@@ -43,7 +43,9 @@ func _run() -> void:
 			hit["barycentric"],
 			ray_dir,
 			0.06,
-			1.0
+			1.0,
+			hit["position"],
+			hit["rest_center_local"]
 		)
 		var event_end := Time.get_ticks_usec()
 		var full_end := Time.get_ticks_usec()

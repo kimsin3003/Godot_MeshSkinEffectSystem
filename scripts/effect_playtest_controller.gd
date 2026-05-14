@@ -189,7 +189,9 @@ func _apply_surface_event(screen_position: Vector2) -> Dictionary:
 		hit["barycentric"],
 		ray_dir,
 		radius_m,
-		strength
+		strength,
+		hit["position"],
+		hit["rest_center_local"]
 	)
 	_add_marker(visual_hit, _color_for_effect(selected_effect_id))
 	_update_hud("hit " + str(hit["mesh"]))
@@ -250,6 +252,7 @@ func _aabb_corners(bounds: AABB) -> Array[Vector3]:
 func _raycast_visual_mesh(ray_origin: Vector3, ray_dir: Vector3) -> Dictionary:
 	var best := {}
 	var best_t := INF
+	var pose_cache: Dictionary = {}
 	for surface_record in raycast_surfaces:
 		var mesh_instance: MeshInstance3D = surface_record["mesh_instance"]
 		if not is_instance_valid(mesh_instance):
@@ -262,7 +265,7 @@ func _raycast_visual_mesh(ray_origin: Vector3, ray_dir: Vector3) -> Dictionary:
 		var arrays: Array = surface_record["arrays"]
 		var vertices: PackedVector3Array = surface_record["vertices"]
 		var indices: PackedInt32Array = surface_record["indices"]
-		var world_vertices := _resolve_surface_vertices_world(mesh_instance, arrays, surface_index)
+		var world_vertices := _resolve_surface_vertices_world(mesh_instance, arrays, surface_index, pose_cache)
 
 		var triangle_count := indices.size() / 3 if not indices.is_empty() else vertices.size() / 3
 		for triangle_index in triangle_count:
@@ -274,14 +277,17 @@ func _raycast_visual_mesh(ray_origin: Vector3, ray_dir: Vector3) -> Dictionary:
 			var v2 := world_vertices[i2]
 			var t := _intersect_ray_triangle(ray_origin, ray_dir, v0, v1, v2)
 			if t > 0.0 and t < best_t:
+				var hit_position := ray_origin + ray_dir * t
+				var barycentric := _triangle_barycentric(hit_position, v0, v1, v2)
 				best_t = t
 				best = {
-					"position": ray_origin + ray_dir * t,
+					"position": hit_position,
 					"mesh": mesh_instance.name,
 					"mesh_instance": mesh_instance,
 					"surface": surface_index,
 					"triangle_indices": PackedInt32Array([i0, i1, i2]),
-					"barycentric": _triangle_barycentric(ray_origin + ray_dir * t, v0, v1, v2),
+					"barycentric": barycentric,
+					"rest_center_local": _resolve_triangle_rest_local(mesh_instance, vertices, i0, i1, i2, barycentric),
 				}
 	return best
 
@@ -322,9 +328,27 @@ func _bounds_from_vertices(vertices: PackedVector3Array) -> AABB:
 func _resolve_surface_vertices_world(
 	mesh_instance: MeshInstance3D,
 	arrays: Array,
-	surface_index: int
+	surface_index: int,
+	pose_cache: Dictionary
 ) -> PackedVector3Array:
-	return accumulator.resolve_surface_vertices_world(mesh_instance, arrays, surface_index)
+	return accumulator.resolve_surface_vertices_world(mesh_instance, arrays, surface_index, pose_cache)
+
+
+func _resolve_triangle_rest_local(
+	mesh_instance: MeshInstance3D,
+	vertices: PackedVector3Array,
+	i0: int,
+	i1: int,
+	i2: int,
+	barycentric: Vector3
+) -> Vector3:
+	var mesh_local := (
+		vertices[i0] * barycentric.x
+		+ vertices[i1] * barycentric.y
+		+ vertices[i2] * barycentric.z
+	)
+	var to_character := character_root.global_transform.affine_inverse() * mesh_instance.global_transform
+	return to_character * mesh_local
 
 
 func _ray_intersects_local_bounds(

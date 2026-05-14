@@ -29,8 +29,9 @@
 현재 성능 측정:
 
 ```text
-before optimization: hits=8 raycast_ms=98.746 event_ms=3.583 full_ms=102.329
-latest benchmark:    hits=8 raycast_ms=7.624  event_ms=10.368 full_ms=17.993
+initial path:       hits=8 raycast_ms=98.746 event_ms=3.583  full_ms=102.329
+first optimized:    hits=8 raycast_ms=7.624  event_ms=10.368 full_ms=17.993
+latest benchmark:  hits=8 raycast_ms=7.440  event_ms=0.207  full_ms=7.648
 ```
 
 명령:
@@ -42,7 +43,8 @@ godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/benchmark_p
 해석:
 
 - 가장 컸던 병목은 playtest용 visual triangle raycast였다.
-- 최적화 후에도 click당 약 18 ms가 걸린다. 이 수치는 실제 게임 hit path로 받아들이면 안 된다.
+- 중복 skinning attachment resolve를 제거한 뒤 event/splat path는 약 0.2 ms로 내려갔다.
+- 최적화 후에도 click당 약 7.6 ms가 걸리며, 대부분은 exact visual raycast다. 이 수치는 실제 게임 hit path로 받아들이면 안 된다.
 - Unreal 게임에서는 physics/collision hit를 입력으로 받고, visual exterior 보정만 별도 proxy에서 수행해야 한다.
 
 ## Runtime 데이터 구조
