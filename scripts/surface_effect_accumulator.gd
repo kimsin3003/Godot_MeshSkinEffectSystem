@@ -4,11 +4,14 @@ extends Node
 const MAX_IMPACTS := 32
 const DEFAULT_IMPACT_RADIUS_M := 0.05
 const DEFAULT_SAMPLE_LIMIT := 8192
+const DEFAULT_EFFECT_VOLUME_RESOLUTION := 48
 const EFFECT_BULLET_IMPACT_ID := 1
+const EMPTY_EFFECT_VOLUME_COLOR := Color(0.0, 0.0, 0.0, 0.0)
 
 @export var character_root: Node3D
 @export var deformation_provider: Node
 @export var sample_limit := DEFAULT_SAMPLE_LIMIT
+@export var effect_volume_resolution := DEFAULT_EFFECT_VOLUME_RESOLUTION
 @export var impact_radius_m := DEFAULT_IMPACT_RADIUS_M
 @export var shader: Shader = preload("res://shaders/surface_effects.gdshader")
 
@@ -19,6 +22,12 @@ var impact_spheres := PackedVector4Array()
 var impact_dirs := PackedVector4Array()
 var impact_meta := PackedVector4Array()
 var impact_cursor := 0
+var effect_volume_texture: ImageTexture3D
+var effect_volume_images: Array[Image] = []
+var effect_volume_origin_local := Vector3(-1.0, -1.0, -1.0)
+var effect_volume_size_local := Vector3(2.0, 2.0, 2.0)
+var effect_volume_inv_size := Vector3(0.5, 0.5, 0.5)
+var effect_volume_dirty := true
 var sand_direction_world := Vector3(1, 0, 0)
 var sand_front := -10.0
 var sand_amount := 0.0
@@ -32,6 +41,8 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if character_root != null and not shader_materials.is_empty():
 		_rebuild_event_uniform_arrays()
+		if effect_volume_dirty or _has_attached_events():
+			_rebuild_effect_volume()
 		_sync_impact_params()
 		_sync_transform_params()
 
@@ -40,6 +51,7 @@ func rebuild_for_character(root: Node3D) -> void:
 	character_root = root
 	clear_impacts()
 	sampler.rebuild(root, sample_limit)
+	_rebuild_effect_volume_storage(root)
 	_rebuild_materials(root)
 	_sync_all_shader_params()
 
@@ -59,7 +71,9 @@ func get_impact_count() -> int:
 func estimate_memory_bytes() -> int:
 	var sampler_bytes := sampler.estimate_memory_bytes()
 	var impact_bytes := MAX_IMPACTS * 32
-	return sampler_bytes + impact_bytes
+	var volume_resolution := _clamped_effect_volume_resolution()
+	var volume_bytes := volume_resolution * volume_resolution * volume_resolution * 4
+	return sampler_bytes + impact_bytes + volume_bytes
 
 
 func clear_impacts() -> void:
@@ -68,6 +82,8 @@ func clear_impacts() -> void:
 	impact_dirs.clear()
 	impact_meta.clear()
 	impact_cursor = 0
+	effect_volume_dirty = true
+	_rebuild_effect_volume()
 	_sync_impact_params()
 
 
@@ -187,6 +203,7 @@ func _store_surface_event(
 		impact_cursor = (impact_cursor + 1) % MAX_IMPACTS
 
 	_rebuild_event_uniform_arrays()
+	_rebuild_effect_volume()
 	_sync_impact_params()
 
 
@@ -304,6 +321,11 @@ func _sync_impact_params() -> void:
 		material.set_shader_parameter("impact_spheres", impact_spheres)
 		material.set_shader_parameter("impact_dirs", impact_dirs)
 		material.set_shader_parameter("impact_meta", impact_meta)
+		material.set_shader_parameter("use_surface_effect_volume", effect_volume_texture != null)
+		if effect_volume_texture != null:
+			material.set_shader_parameter("surface_effect_volume", effect_volume_texture)
+		material.set_shader_parameter("effect_volume_origin_local", effect_volume_origin_local)
+		material.set_shader_parameter("effect_volume_inv_size", effect_volume_inv_size)
 
 
 func _rebuild_event_uniform_arrays() -> void:
@@ -321,6 +343,179 @@ func _rebuild_event_uniform_arrays() -> void:
 		impact_spheres.append(Vector4(center_local.x, center_local.y, center_local.z, float(record["radius"])))
 		impact_dirs.append(Vector4(direction_local.x, direction_local.y, direction_local.z, float(record["strength"])))
 		impact_meta.append(Vector4(float(record["effect_id"]), 0.0, 0.0, 0.0))
+
+
+func sample_effect_volume_local(local_position: Vector3) -> Color:
+	if effect_volume_images.is_empty():
+		return EMPTY_EFFECT_VOLUME_COLOR
+
+	var uvw := _local_to_effect_volume_uv(local_position)
+	if uvw.x < 0.0 or uvw.x > 1.0 or uvw.y < 0.0 or uvw.y > 1.0 or uvw.z < 0.0 or uvw.z > 1.0:
+		return EMPTY_EFFECT_VOLUME_COLOR
+
+	var resolution := _clamped_effect_volume_resolution()
+	var x := clampi(int(floor(uvw.x * float(resolution))), 0, resolution - 1)
+	var y := clampi(int(floor(uvw.y * float(resolution))), 0, resolution - 1)
+	var z := clampi(int(floor(uvw.z * float(resolution))), 0, resolution - 1)
+	return effect_volume_images[z].get_pixel(x, y)
+
+
+func _rebuild_effect_volume_storage(root: Node3D) -> void:
+	_update_effect_volume_bounds(root)
+	effect_volume_images.clear()
+
+	var resolution := _clamped_effect_volume_resolution()
+	for z in resolution:
+		var image := Image.create_empty(resolution, resolution, false, Image.FORMAT_RGBA8)
+		image.fill(EMPTY_EFFECT_VOLUME_COLOR)
+		effect_volume_images.append(image)
+
+	effect_volume_texture = ImageTexture3D.new()
+	effect_volume_texture.create(Image.FORMAT_RGBA8, resolution, resolution, resolution, false, effect_volume_images)
+	effect_volume_dirty = true
+	_rebuild_effect_volume()
+
+
+func _update_effect_volume_bounds(root: Node3D) -> void:
+	var meshes: Array[MeshInstance3D] = []
+	_collect_meshes(root, meshes)
+
+	var has_bounds := false
+	var bounds := AABB()
+	var to_character := root.global_transform.affine_inverse()
+	for mesh_instance in meshes:
+		var mesh := mesh_instance.mesh
+		if mesh == null:
+			continue
+
+		var to_local := to_character * mesh_instance.global_transform
+		for corner in _aabb_corners(mesh.get_aabb()):
+			var local_corner := to_local * corner
+			if not has_bounds:
+				bounds = AABB(local_corner, Vector3.ZERO)
+				has_bounds = true
+			else:
+				bounds = bounds.expand(local_corner)
+
+	if not has_bounds:
+		bounds = AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 2.0, 2.0))
+
+	var margin: float = max(impact_radius_m * 2.0, 0.12)
+	bounds = bounds.grow(margin)
+	effect_volume_origin_local = bounds.position
+	effect_volume_size_local = Vector3(
+		max(bounds.size.x, 0.001),
+		max(bounds.size.y, 0.001),
+		max(bounds.size.z, 0.001)
+	)
+	effect_volume_inv_size = Vector3(
+		1.0 / effect_volume_size_local.x,
+		1.0 / effect_volume_size_local.y,
+		1.0 / effect_volume_size_local.z
+	)
+
+
+func _rebuild_effect_volume() -> void:
+	if effect_volume_texture == null or effect_volume_images.is_empty():
+		return
+
+	for image in effect_volume_images:
+		image.fill(EMPTY_EFFECT_VOLUME_COLOR)
+
+	for event_index in impact_spheres.size():
+		_splat_event_to_effect_volume(event_index)
+
+	effect_volume_texture.update(effect_volume_images)
+	effect_volume_dirty = false
+
+
+func _splat_event_to_effect_volume(event_index: int) -> void:
+	var sphere := impact_spheres[event_index]
+	var radius: float = max(sphere.w, 0.001)
+	var center := Vector3(sphere.x, sphere.y, sphere.z)
+	var uvw := _local_to_effect_volume_uv(center)
+	var resolution := _clamped_effect_volume_resolution()
+	var radius_uv := Vector3(
+		radius * effect_volume_inv_size.x,
+		radius * effect_volume_inv_size.y,
+		radius * effect_volume_inv_size.z
+	)
+
+	var min_x := clampi(int(floor((uvw.x - radius_uv.x) * float(resolution))), 0, resolution - 1)
+	var max_x := clampi(int(ceil((uvw.x + radius_uv.x) * float(resolution))), 0, resolution - 1)
+	var min_y := clampi(int(floor((uvw.y - radius_uv.y) * float(resolution))), 0, resolution - 1)
+	var max_y := clampi(int(ceil((uvw.y + radius_uv.y) * float(resolution))), 0, resolution - 1)
+	var min_z := clampi(int(floor((uvw.z - radius_uv.z) * float(resolution))), 0, resolution - 1)
+	var max_z := clampi(int(ceil((uvw.z + radius_uv.z) * float(resolution))), 0, resolution - 1)
+	var channel := _effect_volume_channel(int(floor(impact_meta[event_index].x + 0.5)))
+	var strength: float = clamp(impact_dirs[event_index].w, 0.0, 4.0)
+
+	for z in range(min_z, max_z + 1):
+		var local_z := effect_volume_origin_local.z + (float(z) + 0.5) / float(resolution) * effect_volume_size_local.z
+		for y in range(min_y, max_y + 1):
+			var local_y := effect_volume_origin_local.y + (float(y) + 0.5) / float(resolution) * effect_volume_size_local.y
+			for x in range(min_x, max_x + 1):
+				var local_x := effect_volume_origin_local.x + (float(x) + 0.5) / float(resolution) * effect_volume_size_local.x
+				var local_position := Vector3(local_x, local_y, local_z)
+				var distance01: float = local_position.distance_to(center) / radius
+				var mask: float = (1.0 - _smoothstep(0.55, 1.0, distance01)) * strength
+				if mask <= 0.0:
+					continue
+
+				var image := effect_volume_images[z]
+				var color := image.get_pixel(x, y)
+				match channel:
+					0:
+						color.r = max(color.r, clamp(mask, 0.0, 1.0))
+					1:
+						color.g = max(color.g, clamp(mask, 0.0, 1.0))
+					2:
+						color.b = max(color.b, clamp(mask, 0.0, 1.0))
+					_:
+						color.a = max(color.a, clamp(mask, 0.0, 1.0))
+				image.set_pixel(x, y, color)
+
+
+func _local_to_effect_volume_uv(local_position: Vector3) -> Vector3:
+	return Vector3(
+		(local_position.x - effect_volume_origin_local.x) * effect_volume_inv_size.x,
+		(local_position.y - effect_volume_origin_local.y) * effect_volume_inv_size.y,
+		(local_position.z - effect_volume_origin_local.z) * effect_volume_inv_size.z
+	)
+
+
+func _effect_volume_channel(effect_id: int) -> int:
+	return clampi(effect_id - 1, 0, 3)
+
+
+func _has_attached_events() -> bool:
+	for record in surface_events:
+		var attachment: Dictionary = record["attachment"]
+		if not attachment.is_empty():
+			return true
+	return false
+
+
+func _smoothstep(edge0: float, edge1: float, value: float) -> float:
+	var t: float = clamp((value - edge0) / max(edge1 - edge0, 0.000001), 0.0, 1.0)
+	return t * t * (3.0 - 2.0 * t)
+
+
+func _clamped_effect_volume_resolution() -> int:
+	return clampi(effect_volume_resolution, 16, 64)
+
+
+func _aabb_corners(bounds: AABB) -> Array[Vector3]:
+	return [
+		Vector3(bounds.position.x, bounds.position.y, bounds.position.z),
+		Vector3(bounds.end.x, bounds.position.y, bounds.position.z),
+		Vector3(bounds.position.x, bounds.end.y, bounds.position.z),
+		Vector3(bounds.end.x, bounds.end.y, bounds.position.z),
+		Vector3(bounds.position.x, bounds.position.y, bounds.end.z),
+		Vector3(bounds.end.x, bounds.position.y, bounds.end.z),
+		Vector3(bounds.position.x, bounds.end.y, bounds.end.z),
+		Vector3(bounds.end.x, bounds.end.y, bounds.end.z),
+	]
 
 
 func _resolve_attachment_world(attachment: Dictionary) -> Vector3:

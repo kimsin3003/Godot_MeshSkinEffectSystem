@@ -33,6 +33,10 @@ uniform int impact_count = 0;
 uniform vec4 impact_spheres[MAX_IMPACTS];
 uniform vec4 impact_dirs[MAX_IMPACTS];
 uniform vec4 impact_meta[MAX_IMPACTS];
+uniform bool use_surface_effect_volume = false;
+uniform sampler3D surface_effect_volume;
+uniform vec3 effect_volume_origin_local = vec3(-1.0, -1.0, -1.0);
+uniform vec3 effect_volume_inv_size = vec3(0.5, 0.5, 0.5);
 uniform mat4 character_inverse_world = mat4(1.0);
 uniform vec3 sand_direction_world = vec3(1.0, 0.0, 0.0);
 uniform float sand_front = -10.0;
@@ -67,7 +71,35 @@ vec3 color_for_effect_id(int effect_id) {
 }
 
 
-vec4 surface_event_mask(vec3 pos, vec3 normal) {
+vec4 color_from_effect_masks(vec4 masks) {
+	float weight = masks.r + masks.g + masks.b + masks.a;
+	if (weight <= 0.0001) {
+		return vec4(blood_color.rgb, 0.0);
+	}
+
+	vec3 color_sum = blood_color.rgb * masks.r;
+	color_sum += effect_2_color.rgb * masks.g;
+	color_sum += effect_3_color.rgb * masks.b;
+	color_sum += effect_4_color.rgb * masks.a;
+	float max_mask = max(max(masks.r, masks.g), max(masks.b, masks.a));
+	return vec4(color_sum / weight, clamp(max_mask, 0.0, 1.0));
+}
+
+
+vec4 surface_event_volume_mask(vec3 pos) {
+	vec3 uvw = (pos - effect_volume_origin_local) * effect_volume_inv_size;
+	if (
+		uvw.x < 0.0 || uvw.x > 1.0 ||
+		uvw.y < 0.0 || uvw.y > 1.0 ||
+		uvw.z < 0.0 || uvw.z > 1.0
+	) {
+		return vec4(blood_color.rgb, 0.0);
+	}
+	return color_from_effect_masks(texture(surface_effect_volume, uvw));
+}
+
+
+vec4 surface_event_array_mask(vec3 pos, vec3 normal) {
 	float max_mask = 0.0;
 	float weight = 0.0;
 	vec3 color_sum = vec3(0.0);
@@ -122,7 +154,10 @@ float sample_channel(vec4 value, int channel) {
 
 
 void fragment() {
-	vec4 surface_event = surface_event_mask(effect_pos, normalize(effect_normal));
+	vec4 surface_event = surface_event_array_mask(effect_pos, normalize(effect_normal));
+	if (use_surface_effect_volume) {
+		surface_event = surface_event_volume_mask(effect_pos);
+	}
 	float blood = surface_event.a;
 	float sand = sand_mask(world_pos, world_normal);
 	vec4 base_sample = base_color;

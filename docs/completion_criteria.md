@@ -32,11 +32,11 @@ Already covered:
 - Godot 4.6.2 import and runtime execution.
 - Synthetic layered mesh exterior selection.
 - Synthetic multi-material-slot state propagation.
-- Artist material event contract is covered by `tests/test_surface_effects.gd`: `add_surface_effect(7, ...)` pushes resolved position/radius, direction/strength, and `effect_id` metadata to every material slot.
+- Artist material event contract is covered by `tests/test_surface_effects.gd`: `add_surface_effect(7, ...)` pushes resolved position/radius, direction/strength, and `effect_id` metadata to every material slot, and verifies O(1) volume accumulation.
 - Real Sophia skinned character import: 4 slots, 93 bones, 8 animations.
 - Real Kenney FBX model and animation FBX import.
 - Real Quaternius Adventurer layered garment import: 4 skinned mesh parts, 17 material surfaces, 79 bones.
-- Real multi-layer garment exterior resolution is covered by `tests/test_real_layered_garment_asset.gd`: a real column with 2 overlapping source surfaces resolves from inner `hit_z=0.029` to outer `resolved_z=-0.189`, with memory at `323968` bytes.
+- Real multi-layer garment exterior resolution is covered by `tests/test_real_layered_garment_asset.gd`: a real column with 2 overlapping source surfaces resolves from inner `hit_z=0.029` to outer `resolved_z=-0.189`, with memory at `766336` bytes.
 - Real UV seam/boundary visual quality is covered by `tests/render_real_seam_boundary_smoke.gd`: it captures `artifacts/quaternius_layered_seam_effects.png` and asserts impact coverage on both sides of a real multi-surface boundary.
 - Real Sophia render smoke with visible impact shader.
 - Runtime clothing swap is covered by `tests/test_runtime_clothing_swap.gd`: generated `ArrayMesh` outerwear is replaced, sampler/material counts update, stale impacts clear, and memory remains below 1 MB.

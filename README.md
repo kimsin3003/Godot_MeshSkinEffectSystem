@@ -2,9 +2,9 @@
 
 Godot 4 prototype for UV-independent accumulated surface effects on runtime-generated skinned characters.
 
-The prototype keeps per-character state below 1 MB by storing compact effect records and sparse exterior mesh samples instead of allocating per-slot render targets.
+The prototype keeps per-character state below 1 MB by storing compact effect records, sparse exterior mesh samples, and one shared 48³ RGBA8 effect volume instead of allocating per-slot render targets.
 
-Materials receive compact surface event uniforms: local position/radius, direction/strength, and effect id. The included shader renders `effect_id == 1` as the default impact mark, while custom artist shaders can use the same data for other effect types.
+The default material path is O(1) per fragment: it samples the shared 3D effect volume once, where RGBA channels represent effect classes 1-4. The compact event uniforms are still provided for debugging and custom materials that need raw position/radius/direction/effect-id records.
 
 See `docs/goal.md` for the translated feature goal and implementation constraints.
 See `docs/verification.md` for the current requirement-to-test matrix.

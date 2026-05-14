@@ -81,6 +81,11 @@ func _test_multi_material_slot_binding() -> void:
 	for surface_index in split_shell.mesh.get_surface_count():
 		var material := split_shell.get_surface_override_material(surface_index)
 		_assert(material.get_shader_parameter("impact_count") == 1, "impact state was not shared across slots")
+		_assert(material.get_shader_parameter("use_surface_effect_volume"), "O(1) volume path was not enabled")
+		_assert(material.get_shader_parameter("surface_effect_volume") is ImageTexture3D, "surface effect volume was not bound")
+
+	var volume_sample := accumulator.sample_effect_volume_local(resolved_local)
+	_assert(volume_sample.r > 0.1, "impact was not accumulated into the O(1) volume")
 
 	accumulator.rebuild_for_character(root)
 	for surface_index in split_shell.mesh.get_surface_count():
@@ -120,6 +125,9 @@ func _test_artist_effect_metadata_binding() -> void:
 		_assert(meta.size() == 1, "artist event metadata missing")
 		_assert(is_equal_approx(meta[0].x, float(effect_id)), "artist effect id was not pushed to material")
 		_assert(is_equal_approx(dirs[0].w, 0.35), "artist event strength was not pushed to material")
+
+	var volume_sample := accumulator.sample_effect_volume_local(resolved_local)
+	_assert(volume_sample.a > 0.1, "artist event was not accumulated into the fourth O(1) volume channel")
 
 	print("artist_effect_metadata: effect_id=%d resolved_x=%.3f slots=%d" % [
 		effect_id,
