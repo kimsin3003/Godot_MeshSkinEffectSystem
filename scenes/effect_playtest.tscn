@@ -18,7 +18,7 @@ script = ExtResource("1_controller")
 [node name="SurfaceEffectAccumulator" type="Node" parent="."]
 script = ExtResource("2_accumulator")
 character_root = NodePath("../Character")
-sample_limit = 32768
+sample_limit = 8192
 
 [node name="Camera3D" type="Camera3D" parent="."]
 current = true

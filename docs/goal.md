@@ -63,7 +63,8 @@ UV 대신 character-local/rest-space 좌표에서 효과를 관리한다.
 
 - Sophia: `776688` bytes
 - Kenney: `484552` bytes
-- Quaternius layered garment / playtest asset: `981632` bytes
+- Quaternius layered garment validation asset: `981632` bytes
+- Quaternius playtest asset with sampler cap: `820160` bytes
 
 단, 40만 vertex 캐릭터에서 Godot의 float4 `CUSTOM0`를 그대로 쓰면 rest attribute만 약 6.4 MB가 되어 원래 1 MB 제약을 넘는다. 이 prototype은 동작 원리 검증용이고, Unreal 최종 구현은 `PreSkinnedLocalPosition` 같은 엔진 제공 rest/pre-skinned 좌표를 쓰거나 half/quantized/custom vertex stream, GDExtension/engine-level 압축 경로가 필요하다.
 
@@ -91,7 +92,7 @@ UV 대신 character-local/rest-space 좌표에서 효과를 관리한다.
 - Material 기본 경로는 `PreSkinnedLocalPosition` 기반 volume sample이어야 하며, event 개수만큼 loop를 돌면 안 된다.
 - 40만 vertex 캐릭터에서는 Godot처럼 float4 `CUSTOM0`를 추가하면 memory budget을 크게 넘는다.
 - Physics hit는 shot direction 기준 visual outer layer로 보정해야 하지만, GameThread에서 전체 visual mesh를 매번 스캔하면 안 된다.
-- Clothing swap/runtime mesh rebuild마다 proxy, volume, generation id를 다시 만들고 이전 worker 결과는 폐기해야 한다.
+- Clothing swap/runtime mesh rebuild는 event-driven으로 요청하고, proxy/volume/generation id를 다시 만들며 이전 worker 결과는 폐기해야 한다. 매 frame mesh 변경을 찾기 위해 전체 component tree나 vertex buffer를 훑으면 안 된다.
 - Tiny bullet mark가 반드시 원형이어야 하면 coarse volume만으로는 부족할 수 있다. 이 경우 short-lived high-resolution stamp나 제한된 recent event decal path를 volume과 함께 쓴다.
 
 자세한 Unreal 포팅 기준은 `docs/unreal_implementation_notes.md`에 정리했다.

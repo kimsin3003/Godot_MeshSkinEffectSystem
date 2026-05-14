@@ -68,6 +68,7 @@ godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_sand
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/render_real_seam_boundary_smoke.gd
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/benchmark_playtest_hit.gd
 godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/benchmark_accumulation_scaling.gd
+godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/benchmark_rebuild_cost.gd
 ```
 
 The render tests compare tracked metrics against `tests/visual_baselines.json`; they are not just nonblank smoke captures.

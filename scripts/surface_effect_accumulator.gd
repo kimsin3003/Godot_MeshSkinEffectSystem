@@ -8,6 +8,7 @@ const DEFAULT_EFFECT_VOLUME_RESOLUTION := 48
 const EFFECT_BULLET_IMPACT_ID := 1
 const EFFECT_SAND_ID := 2
 const EMPTY_EFFECT_VOLUME_COLOR := Color(0.0, 0.0, 0.0, 0.0)
+const REST_VOLUME_META := "_surface_effect_rest_volume"
 
 @export var character_root: Node3D
 @export var deformation_provider: Node
@@ -70,7 +71,7 @@ func _process(_delta: float) -> void:
 
 func rebuild_for_character(root: Node3D) -> void:
 	character_root = root
-	clear_impacts()
+	clear_impacts(false)
 	sampler.rebuild(root, sample_limit)
 	_rebuild_effect_volume_storage(root)
 	_ensure_rest_volume_attributes(root)
@@ -105,7 +106,7 @@ func get_minimum_stable_effect_radius() -> float:
 	return max(max(voxel_size.x, voxel_size.y), voxel_size.z) * minimum_splat_voxel_span
 
 
-func clear_impacts() -> void:
+func clear_impacts(reset_volume: bool = true) -> void:
 	surface_events.clear()
 	impact_spheres.clear()
 	impact_dirs.clear()
@@ -114,7 +115,8 @@ func clear_impacts() -> void:
 	total_surface_event_count = 0
 	effect_volume_dirty = true
 	_reset_sand_accumulation_cursor()
-	_rebuild_effect_volume()
+	if reset_volume:
+		_rebuild_effect_volume()
 	_sync_event_uniform_params()
 
 
@@ -438,10 +440,14 @@ func _collect_meshes(node: Node, out_meshes: Array[MeshInstance3D]) -> void:
 
 
 func _read_surface_material(mesh_instance: MeshInstance3D, surface_index: int) -> Material:
-	var material := mesh_instance.get_surface_override_material(surface_index)
-	if material == null and mesh_instance.mesh != null:
-		material = mesh_instance.mesh.surface_get_material(surface_index)
-	return material
+	var override_material := mesh_instance.get_surface_override_material(surface_index)
+	if override_material is BaseMaterial3D:
+		return override_material
+	if mesh_instance.mesh != null:
+		var source_material := mesh_instance.mesh.surface_get_material(surface_index)
+		if source_material != null:
+			return source_material
+	return override_material
 
 
 func _bind_source_material(target_material: ShaderMaterial, source_material: Material) -> void:
@@ -599,8 +605,9 @@ func _rebuild_effect_volume_storage(root: Node3D) -> void:
 
 	effect_volume_texture = Texture2DArray.new()
 	effect_volume_texture.create_from_images(effect_volume_images)
-	effect_volume_dirty = true
-	_rebuild_effect_volume()
+	effect_volume_dirty = false
+	effect_volume_dirty_layers.clear()
+	pending_effect_volume_layers.clear()
 
 
 func _update_effect_volume_bounds(root: Node3D) -> void:
@@ -968,6 +975,10 @@ func _ensure_rest_volume_attributes(root: Node3D) -> void:
 
 	var meshes: Array[MeshInstance3D] = []
 	_collect_meshes(root, meshes)
+	if _all_meshes_are_rest_volume_meshes(meshes):
+		rest_attribute_vertex_count = sampler.get_source_vertex_count()
+		return
+
 	for mesh_instance in meshes:
 		_add_rest_volume_attributes(mesh_instance)
 
@@ -976,9 +987,13 @@ func _add_rest_volume_attributes(mesh_instance: MeshInstance3D) -> void:
 	var source_mesh := mesh_instance.mesh
 	if source_mesh == null:
 		return
+	if _mesh_has_rest_volume_attributes(source_mesh):
+		rest_attribute_vertex_count += _count_mesh_vertices(source_mesh)
+		return
 
 	var array_mesh := ArrayMesh.new()
 	array_mesh.resource_name = source_mesh.resource_name + "_RestVolume"
+	array_mesh.set_meta(REST_VOLUME_META, true)
 	var to_character := character_root.global_transform.affine_inverse() * mesh_instance.global_transform
 
 	for surface_index in source_mesh.get_surface_count():
@@ -1013,6 +1028,44 @@ func _add_rest_volume_attributes(mesh_instance: MeshInstance3D) -> void:
 		rest_attribute_vertex_count += vertices.size()
 
 	mesh_instance.mesh = array_mesh
+
+
+func _mesh_has_rest_volume_attributes(mesh: Mesh) -> bool:
+	if mesh.has_meta(REST_VOLUME_META) and bool(mesh.get_meta(REST_VOLUME_META)):
+		return true
+	if not String(mesh.resource_name).ends_with("_RestVolume"):
+		return false
+	for surface_index in mesh.get_surface_count():
+		var arrays := mesh.surface_get_arrays(surface_index)
+		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var rest_positions = arrays[Mesh.ARRAY_CUSTOM0]
+		if vertices.is_empty():
+			continue
+		if not rest_positions is PackedFloat32Array:
+			return false
+		if (rest_positions as PackedFloat32Array).size() != vertices.size() * 4:
+			return false
+	return true
+
+
+func _all_meshes_are_rest_volume_meshes(meshes: Array[MeshInstance3D]) -> bool:
+	if meshes.is_empty():
+		return false
+	for mesh_instance in meshes:
+		if mesh_instance.mesh == null:
+			return false
+		if not _mesh_has_rest_volume_attributes(mesh_instance.mesh):
+			return false
+	return true
+
+
+func _count_mesh_vertices(mesh: Mesh) -> int:
+	var count := 0
+	for surface_index in mesh.get_surface_count():
+		var arrays := mesh.surface_get_arrays(surface_index)
+		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		count += vertices.size()
+	return count
 
 
 func _resolve_attachment_world(attachment: Dictionary) -> Vector3:

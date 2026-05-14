@@ -8,11 +8,13 @@ var owner: Node3D
 var local_positions := PackedVector3Array()
 var local_normals := PackedVector3Array()
 var max_samples := DEFAULT_MAX_SAMPLES
+var source_vertex_count := 0
 
 
 func rebuild(root: Node3D, sample_limit: int = DEFAULT_MAX_SAMPLES) -> void:
 	owner = root
 	max_samples = max(1, sample_limit)
+	source_vertex_count = 0
 	local_positions.clear()
 	local_normals.clear()
 
@@ -21,25 +23,40 @@ func rebuild(root: Node3D, sample_limit: int = DEFAULT_MAX_SAMPLES) -> void:
 	if meshes.is_empty():
 		return
 
-	var total_vertices := 0
+	var surface_records: Array[Dictionary] = []
 	for mesh_instance in meshes:
 		var mesh := mesh_instance.mesh
 		if mesh == null:
 			continue
+		var to_owner: Transform3D = owner.global_transform.affine_inverse() * mesh_instance.global_transform
 		for surface_index in mesh.get_surface_count():
 			var arrays: Array = mesh.surface_get_arrays(surface_index)
 			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-			total_vertices += vertices.size()
+			if vertices.is_empty():
+				continue
+			var normals := PackedVector3Array()
+			if arrays[Mesh.ARRAY_NORMAL] is PackedVector3Array:
+				normals = arrays[Mesh.ARRAY_NORMAL]
+			source_vertex_count += vertices.size()
+			surface_records.append({
+				"to_owner": to_owner,
+				"vertices": vertices,
+				"normals": normals,
+			})
 
-	var stride: int = max(1, int(ceil(float(max(1, total_vertices)) / float(max_samples))))
+	var stride: int = max(1, int(ceil(float(max(1, source_vertex_count)) / float(max_samples))))
 	var visited: int = 0
 
-	for mesh_instance in meshes:
-		visited = _append_mesh_samples(mesh_instance, stride, visited)
+	for surface_record in surface_records:
+		visited = _append_surface_samples(surface_record, stride, visited)
 
 
 func get_sample_count() -> int:
 	return local_positions.size()
+
+
+func get_source_vertex_count() -> int:
+	return source_vertex_count
 
 
 func estimate_memory_bytes() -> int:
@@ -101,37 +118,25 @@ func _collect_meshes(node: Node, out_meshes: Array[MeshInstance3D]) -> void:
 		_collect_meshes(child, out_meshes)
 
 
-func _append_mesh_samples(mesh_instance: MeshInstance3D, stride: int, visited: int) -> int:
-	var mesh := mesh_instance.mesh
-	if mesh == null:
-		return visited
+func _append_surface_samples(surface_record: Dictionary, stride: int, visited: int) -> int:
+	var to_owner: Transform3D = surface_record["to_owner"]
+	var vertices: PackedVector3Array = surface_record["vertices"]
+	var normals: PackedVector3Array = surface_record["normals"]
 
-	var to_owner: Transform3D = owner.global_transform.affine_inverse() * mesh_instance.global_transform
-
-	for surface_index in mesh.get_surface_count():
-		var arrays: Array = mesh.surface_get_arrays(surface_index)
-		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-		if vertices.is_empty():
+	for vertex_index in vertices.size():
+		if local_positions.size() >= max_samples:
+			return visited
+		if visited % stride != 0:
+			visited += 1
 			continue
 
-		var normals := PackedVector3Array()
-		if arrays[Mesh.ARRAY_NORMAL] is PackedVector3Array:
-			normals = arrays[Mesh.ARRAY_NORMAL]
+		var local_pos := to_owner * vertices[vertex_index]
+		var local_normal := Vector3.UP
+		if vertex_index < normals.size():
+			local_normal = (to_owner.basis * normals[vertex_index]).normalized()
 
-		for vertex_index in vertices.size():
-			if local_positions.size() >= max_samples:
-				return visited
-			if visited % stride != 0:
-				visited += 1
-				continue
-
-			var local_pos := to_owner * vertices[vertex_index]
-			var local_normal := Vector3.UP
-			if vertex_index < normals.size():
-				local_normal = (to_owner.basis * normals[vertex_index]).normalized()
-
-			local_positions.append(local_pos)
-			local_normals.append(local_normal)
-			visited += 1
+		local_positions.append(local_pos)
+		local_normals.append(local_normal)
+		visited += 1
 
 	return visited
