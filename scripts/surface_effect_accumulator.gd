@@ -480,10 +480,11 @@ func _splat_event_to_effect_volume(event_index: int) -> void:
 func _splat_effect_to_volume(effect_id: int, center: Vector3, radius: float, strength: float) -> void:
 	var uvw := _local_to_effect_volume_uv(center)
 	var resolution := _clamped_effect_volume_resolution()
+	var effective_radius: float = max(radius, 0.001)
 	var radius_uv := Vector3(
-		radius * effect_volume_inv_size.x,
-		radius * effect_volume_inv_size.y,
-		radius * effect_volume_inv_size.z
+		effective_radius * effect_volume_inv_size.x,
+		effective_radius * effect_volume_inv_size.y,
+		effective_radius * effect_volume_inv_size.z
 	)
 
 	var min_x := clampi(int(floor((uvw.x - radius_uv.x) * float(resolution))), 0, resolution - 1)
@@ -494,6 +495,7 @@ func _splat_effect_to_volume(effect_id: int, center: Vector3, radius: float, str
 	var max_z := clampi(int(ceil((uvw.z + radius_uv.z) * float(resolution))), 0, resolution - 1)
 	var channel := _effect_volume_channel(effect_id)
 	var clamped_strength: float = clamp(strength, 0.0, 4.0)
+	var wrote_voxel := false
 
 	for z in range(min_z, max_z + 1):
 		var local_z := effect_volume_origin_local.z + (float(z) + 0.5) / float(resolution) * effect_volume_size_local.z
@@ -502,7 +504,7 @@ func _splat_effect_to_volume(effect_id: int, center: Vector3, radius: float, str
 			for x in range(min_x, max_x + 1):
 				var local_x := effect_volume_origin_local.x + (float(x) + 0.5) / float(resolution) * effect_volume_size_local.x
 				var local_position := Vector3(local_x, local_y, local_z)
-				var distance01: float = local_position.distance_to(center) / radius
+				var distance01: float = local_position.distance_to(center) / effective_radius
 				var mask: float = (1.0 - _smoothstep(0.55, 1.0, distance01)) * clamped_strength
 				if mask <= 0.0:
 					continue
@@ -519,6 +521,10 @@ func _splat_effect_to_volume(effect_id: int, center: Vector3, radius: float, str
 					_:
 						color.a = max(color.a, clamp(mask, 0.0, 1.0))
 				image.set_pixel(x, y, color)
+				wrote_voxel = true
+
+	if not wrote_voxel:
+		_write_effect_volume_sample(effect_id, center, clamped_strength)
 
 
 func _accumulate_sand_to_effect_volume() -> void:

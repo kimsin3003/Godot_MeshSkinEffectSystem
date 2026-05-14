@@ -14,6 +14,7 @@ func _run() -> void:
 	_test_multi_material_slot_binding()
 	_test_artist_effect_metadata_binding()
 	_test_volume_accumulates_past_debug_event_limit()
+	_test_sub_voxel_impact_still_records()
 	_test_sand_accumulates_in_shared_volume()
 	_test_material_preservation()
 	quit(1 if failed else 0)
@@ -186,6 +187,35 @@ func _test_volume_accumulates_past_debug_event_limit() -> void:
 		int(material.get_shader_parameter("impact_count")),
 		first_volume_sample.g,
 	])
+
+	root.queue_free()
+	accumulator.queue_free()
+
+
+func _test_sub_voxel_impact_still_records() -> void:
+	var root := Node3D.new()
+	root.name = "SubVoxelImpactCharacter"
+	var split_shell := _make_split_slot_shell()
+	root.add_child(split_shell)
+	get_root().add_child(root)
+
+	var accumulator: SurfaceEffectAccumulator = SurfaceEffectAccumulatorScript.new()
+	accumulator.sample_limit = 256
+	get_root().add_child(accumulator)
+	accumulator.rebuild_for_character(root)
+
+	var hit_local := Vector3(-0.5, 0.03, 0.012)
+	accumulator.add_surface_effect_at_visual_surface(
+		1,
+		root.to_global(hit_local),
+		Vector3.LEFT,
+		0.005,
+		1.0
+	)
+
+	var volume_sample := accumulator.sample_effect_volume_local(hit_local)
+	_assert(volume_sample.r > 0.1, "sub-voxel impact did not write the nearest effect volume cell")
+	print("sub_voxel_impact: radius=0.005 red=%.3f" % volume_sample.r)
 
 	root.queue_free()
 	accumulator.queue_free()

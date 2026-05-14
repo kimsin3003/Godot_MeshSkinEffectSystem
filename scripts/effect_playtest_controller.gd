@@ -4,6 +4,10 @@ const SurfaceEffectAccumulatorScript := preload("res://scripts/surface_effect_ac
 const ADVENTURER_PATH := "res://external/quaternius_modular_women_glb/Adventurer.glb"
 const SOLDIER_PATH := "res://external/quaternius_modular_women_glb/Soldier.glb"
 const MARKER_LIFETIME := 1.25
+const DEFAULT_RADIUS_M := 0.015
+const MIN_RADIUS_M := 0.005
+const MAX_RADIUS_M := 0.35
+const RADIUS_STEP_M := 0.005
 
 @onready var character_root: Node3D = $Character
 @onready var camera: Camera3D = $Camera3D
@@ -17,7 +21,7 @@ const MARKER_LIFETIME := 1.25
 @onready var status_label: Label = $HUD/Panel/MarginContainer/VBox/StatusLabel
 
 var selected_effect_id := 1
-var radius_m := 0.09
+var radius_m := DEFAULT_RADIUS_M
 var strength := 1.0
 var current_asset_index := 0
 var current_asset_name := ""
@@ -51,10 +55,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif mouse_event.button_index == MOUSE_BUTTON_RIGHT:
 			_start_sandstorm_from_click(mouse_event.position)
 		elif mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			radius_m = clamp(radius_m + 0.01, 0.02, 0.35)
+			radius_m = clamp(radius_m + RADIUS_STEP_M, MIN_RADIUS_M, MAX_RADIUS_M)
 			_update_hud("radius")
 		elif mouse_event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			radius_m = clamp(radius_m - 0.01, 0.02, 0.35)
+			radius_m = clamp(radius_m - RADIUS_STEP_M, MIN_RADIUS_M, MAX_RADIUS_M)
 			_update_hud("radius")
 
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -64,10 +68,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				selected_effect_id = int(key_event.keycode - KEY_0)
 				_update_hud("effect")
 			KEY_BRACKETLEFT:
-				radius_m = clamp(radius_m - 0.01, 0.02, 0.35)
+				radius_m = clamp(radius_m - RADIUS_STEP_M, MIN_RADIUS_M, MAX_RADIUS_M)
 				_update_hud("radius")
 			KEY_BRACKETRIGHT:
-				radius_m = clamp(radius_m + 0.01, 0.02, 0.35)
+				radius_m = clamp(radius_m + RADIUS_STEP_M, MIN_RADIUS_M, MAX_RADIUS_M)
 				_update_hud("radius")
 			KEY_MINUS:
 				strength = clamp(strength - 0.1, 0.1, 4.0)
@@ -338,7 +342,7 @@ func _add_capsule_layer(layer_name: String, radius: float, height: float, color:
 func _add_marker(world_position: Vector3, color: Color) -> void:
 	var marker := MeshInstance3D.new()
 	var mesh := SphereMesh.new()
-	mesh.radius = max(radius_m * 0.08, 0.01)
+	mesh.radius = max(radius_m * 0.12, 0.003)
 	mesh.height = mesh.radius * 2.0
 	marker.mesh = mesh
 	marker.material_override = _marker_material(color)
@@ -377,7 +381,7 @@ func _color_for_effect(effect_id: int) -> Color:
 
 func _update_hud(status: String) -> void:
 	effect_label.text = "Effect %d" % selected_effect_id
-	radius_label.text = "Radius %.2f m" % radius_m
+	radius_label.text = "Radius %.3f m" % radius_m
 	strength_label.text = "Strength %.1f" % strength
 	sand_label.text = "Sand %s %.2f %.2f %.2f" % [
 		"on" if sand_enabled else "off",
