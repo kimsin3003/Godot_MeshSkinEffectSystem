@@ -63,10 +63,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif mouse_event.button_index == MOUSE_BUTTON_RIGHT:
 			_start_sandstorm_from_click(mouse_event.position)
 		elif mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			radius_m = clamp(radius_m + RADIUS_STEP_M, MIN_RADIUS_M, MAX_RADIUS_M)
+			radius_m = clamp(radius_m + RADIUS_STEP_M, _minimum_radius_m(), MAX_RADIUS_M)
 			_update_hud("radius")
 		elif mouse_event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			radius_m = clamp(radius_m - RADIUS_STEP_M, MIN_RADIUS_M, MAX_RADIUS_M)
+			radius_m = clamp(radius_m - RADIUS_STEP_M, _minimum_radius_m(), MAX_RADIUS_M)
 			_update_hud("radius")
 
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -76,10 +76,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				selected_effect_id = int(key_event.keycode - KEY_0)
 				_update_hud("effect")
 			KEY_BRACKETLEFT:
-				radius_m = clamp(radius_m - RADIUS_STEP_M, MIN_RADIUS_M, MAX_RADIUS_M)
+				radius_m = clamp(radius_m - RADIUS_STEP_M, _minimum_radius_m(), MAX_RADIUS_M)
 				_update_hud("radius")
 			KEY_BRACKETRIGHT:
-				radius_m = clamp(radius_m + RADIUS_STEP_M, MIN_RADIUS_M, MAX_RADIUS_M)
+				radius_m = clamp(radius_m + RADIUS_STEP_M, _minimum_radius_m(), MAX_RADIUS_M)
 				_update_hud("radius")
 			KEY_MINUS:
 				strength = clamp(strength - 0.1, 0.1, 4.0)
@@ -137,6 +137,7 @@ func _load_asset(asset_index: int) -> void:
 	_collect_animation_players(character_root, animation_players)
 	_play_first_animation()
 	accumulator.rebuild_for_character(character_root)
+	radius_m = clamp(radius_m, _minimum_radius_m(), MAX_RADIUS_M)
 	_apply_test_palette()
 
 
@@ -367,6 +368,10 @@ func _choose_animation(animation_list: PackedStringArray) -> StringName:
 func _set_animation_enabled(enabled: bool) -> void:
 	for player in animation_players:
 		player.speed_scale = 1.0 if enabled else 0.0
+
+
+func _minimum_radius_m() -> float:
+	return max(MIN_RADIUS_M, accumulator.get_minimum_stable_effect_radius())
 
 
 func _set_animation_loop(player: AnimationPlayer, animation_name: StringName) -> void:

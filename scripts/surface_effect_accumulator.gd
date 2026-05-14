@@ -16,6 +16,7 @@ const EMPTY_EFFECT_VOLUME_COLOR := Color(0.0, 0.0, 0.0, 0.0)
 @export var use_rest_volume_attributes := true
 @export var impact_radius_m := DEFAULT_IMPACT_RADIUS_M
 @export var sand_front_softness := 0.45
+@export var minimum_splat_voxel_span := 1.25
 @export var shader: Shader = preload("res://shaders/surface_effects.gdshader")
 
 var sampler := MeshSurfaceSampler.new()
@@ -80,6 +81,12 @@ func estimate_memory_bytes() -> int:
 	return sampler_bytes + impact_bytes + volume_bytes + rest_attribute_bytes
 
 
+func get_minimum_stable_effect_radius() -> float:
+	var resolution := float(_clamped_effect_volume_resolution())
+	var voxel_size := effect_volume_size_local / resolution
+	return max(max(voxel_size.x, voxel_size.y), voxel_size.z) * minimum_splat_voxel_span
+
+
 func clear_impacts() -> void:
 	surface_events.clear()
 	impact_spheres.clear()
@@ -115,12 +122,13 @@ func add_surface_effect(
 	if shot_dir_world.length_squared() <= 0.000001:
 		shot_dir_world = Vector3.FORWARD
 
+	var effective_radius := _effective_splat_radius(radius_m)
 	var resolved_world := sampler.find_outer_surface(
 		physics_hit_world,
 		shot_dir_world,
-		radius_m * 1.6
+		effective_radius * 1.6
 	)
-	_store_surface_event(effect_id, resolved_world, shot_dir_world, radius_m, strength, {})
+	_store_surface_event(effect_id, resolved_world, shot_dir_world, effective_radius, strength, {})
 	return resolved_world
 
 
@@ -138,7 +146,7 @@ func add_surface_effect_at_visual_surface(
 	if direction_world.length_squared() <= 0.000001:
 		direction_world = Vector3.FORWARD
 
-	_store_surface_event(effect_id, visual_hit_world, direction_world, radius_m, strength, {})
+	_store_surface_event(effect_id, visual_hit_world, direction_world, _effective_splat_radius(radius_m), strength, {})
 	return visual_hit_world
 
 
@@ -167,7 +175,7 @@ func add_surface_effect_at_triangle(
 	}
 	var visual_hit_world := _resolve_attachment_world(attachment)
 	var rest_center_local: Vector3 = _resolve_attachment_rest_local(attachment)
-	_store_surface_event_local(effect_id, rest_center_local, direction_world, radius_m, strength, attachment)
+	_store_surface_event_local(effect_id, rest_center_local, direction_world, _effective_splat_radius(radius_m), strength, attachment)
 	return visual_hit_world
 
 
@@ -223,6 +231,10 @@ func _store_surface_event_local(
 	_rebuild_event_uniform_arrays()
 	_splat_record_to_effect_volume(record)
 	_sync_impact_params()
+
+
+func _effective_splat_radius(radius_m: float) -> float:
+	return max(radius_m, get_minimum_stable_effect_radius())
 
 
 func set_sand_state(direction_world: Vector3, front: float, amount: float) -> void:
