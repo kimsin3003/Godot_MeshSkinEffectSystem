@@ -50,11 +50,11 @@ godot_console --path D:\MeshSurfaceImpactSystem --script res://tests/benchmark_p
 누적 scaling 측정:
 
 ```text
-impact batches: hits_avg_ms=0.213,0.140,0.145,0.144 for 1/32/128/512 hit batches
+impact batches: hits_avg_ms=0.219,0.138,0.142,0.142 for 1/32/128/512 hit batches
 sand before:    sand_step_ms=13.699,43.616,93.483,217.821,227.856,263.155,259.385,259.295
-sand latest:    sand_step_ms=5.444,3.872,9.198,11.117,8.678,0.820,0.767,0.474
-sand frames:    sand_frame_avg_ms=4.455 sand_frame_max_ms=11.083
-rebuild:        repeated rebuild_ms=9.891,9.211,11.293,15.635 swap_ms=178.331
+sand latest:    sand_step_ms=5.318,3.943,8.962,11.111,8.753,0.770,0.754,0.462
+sand frames:    sand_frame_avg_ms=4.656 sand_frame_max_ms=15.153
+rebuild:        repeated rebuild_ms=15.682,16.027,16.210,15.256 swap_ms=179.581
 ```
 
 해석:
@@ -62,7 +62,9 @@ rebuild:        repeated rebuild_ms=9.891,9.211,11.293,15.635 swap_ms=178.331
 - 피격은 누적 개수에 비례해서 느려지지 않는다. Debug event ring은 32개로 제한되고, material은 volume을 O(1)로 샘플한다.
 - 이전 모래 구현은 wind front 뒤의 이미 묻은 sample까지 매 프레임 다시 volume에 썼기 때문에 시간이 갈수록 느려졌다.
 - 현재 Godot 구현은 같은 방향에서는 새로 지나가는 front band만 누적하고, wind-exposed outer shell만 선택하며, sand sample 수를 4096개 이하로 cap한다.
-- Sand volume은 sparse vertex sample 줄무늬를 줄이기 위해 sand channel에만 1-voxel cross brush를 쓴다. Bullet impact의 작은 반경은 이 brush를 쓰지 않는다.
+- Surface sampler는 vertex order 기반 줄무늬를 줄이기 위해 deterministic jitter로 sample을 고른다.
+- Sand volume은 sparse vertex sample 줄무늬를 줄이기 위해 sand channel에만 1-voxel cross brush를 쓴다. Material은 sand channel만 fixed 13-tap tangent-gated volume max filter로 읽어서 normal 방향 haloing을 줄인다.
+- Sand는 material에서 event alpha overlay가 아니라 별도 sand blend로 해석한다. Bullet impact의 작은 반경과 alpha overlay는 이 smoothing을 쓰지 않는다.
 - Volume material path에서는 procedural sand overlay를 끄고, 누적 volume만 표시한다. Procedural sand는 standalone shader test/fallback path에만 남긴다.
 - Godot rebuild는 old-volume clear/upload를 생략하고, 이미 rest volume mesh인 경우 재주입하지 않으며, surface arrays를 one-pass로 sampling한다. 그래도 asset swap은 GLB load/import와 mesh snapshot 때문에 동기 비용이 크다.
 - Unreal production에서는 같은 정책을 worker/GPU update budget으로 옮겨야 한다.

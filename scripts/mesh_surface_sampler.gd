@@ -126,7 +126,7 @@ func _append_surface_samples(surface_record: Dictionary, stride: int, visited: i
 	for vertex_index in vertices.size():
 		if local_positions.size() >= max_samples:
 			return visited
-		if visited % stride != 0:
+		if not _should_keep_sample(visited, stride):
 			visited += 1
 			continue
 
@@ -140,3 +140,15 @@ func _append_surface_samples(surface_record: Dictionary, stride: int, visited: i
 		visited += 1
 
 	return visited
+
+
+func _should_keep_sample(index: int, stride: int) -> bool:
+	if stride <= 1:
+		return true
+	return _sample_hash(index) % stride == 0
+
+
+func _sample_hash(index: int) -> int:
+	var value: int = (index * 1103515245 + 12345) % 2147483647
+	value = (value * 1103515245 + 12345) % 2147483647
+	return value

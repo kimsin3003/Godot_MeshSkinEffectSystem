@@ -36,6 +36,8 @@ uniform vec4 impact_meta[MAX_IMPACTS];
 uniform bool use_surface_effect_volume = false;
 uniform sampler2DArray surface_effect_volume;
 uniform float effect_volume_depth = 48.0;
+uniform bool smooth_sand_volume = true;
+uniform float sand_volume_smoothing_weight = 0.9;
 uniform bool use_rest_volume_position = false;
 uniform vec3 effect_volume_origin_local = vec3(-1.0, -1.0, -1.0);
 uniform vec3 effect_volume_inv_size = vec3(0.5, 0.5, 0.5);
@@ -93,14 +95,13 @@ vec4 color_from_effect_masks(vec4 masks) {
 }
 
 
-vec4 surface_event_volume_mask(vec3 pos) {
-	vec3 uvw = (pos - effect_volume_origin_local) * effect_volume_inv_size;
+vec4 sample_surface_effect_volume(vec3 uvw) {
 	if (
 		uvw.x < 0.0 || uvw.x > 1.0 ||
 		uvw.y < 0.0 || uvw.y > 1.0 ||
 		uvw.z < 0.0 || uvw.z > 1.0
 	) {
-		return vec4(blood_color.rgb, 0.0);
+		return vec4(0.0);
 	}
 	float layer = clamp(uvw.z, 0.0, 1.0) * max(effect_volume_depth - 1.0, 0.0);
 	float layer0 = floor(layer);
@@ -108,7 +109,55 @@ vec4 surface_event_volume_mask(vec3 pos) {
 	float layer_t = fract(layer);
 	vec4 masks0 = texture(surface_effect_volume, vec3(uvw.xy, layer0));
 	vec4 masks1 = texture(surface_effect_volume, vec3(uvw.xy, layer1));
-	return color_from_effect_masks(mix(masks0, masks1, layer_t));
+	return mix(masks0, masks1, layer_t);
+}
+
+
+float volume_axis_tangent_weight(vec3 axis, vec3 normal_local) {
+	return 1.0 - abs(dot(axis, normalize(normal_local)));
+}
+
+
+float smoothed_sand_volume_mask(vec3 uvw, vec3 normal_local, float center_sand) {
+	if (!smooth_sand_volume) {
+		return center_sand;
+	}
+
+	float texel = 1.0 / max(effect_volume_depth, 1.0);
+	float weight = clamp(sand_volume_smoothing_weight, 0.0, 1.0);
+	float far_weight = weight * 0.55;
+	float x_weight = volume_axis_tangent_weight(vec3(1.0, 0.0, 0.0), normal_local);
+	float y_weight = volume_axis_tangent_weight(vec3(0.0, 1.0, 0.0), normal_local);
+	float z_weight = volume_axis_tangent_weight(vec3(0.0, 0.0, 1.0), normal_local);
+	float sand = center_sand;
+	sand = max(sand, sample_surface_effect_volume(uvw + vec3(texel, 0.0, 0.0)).g * weight * x_weight);
+	sand = max(sand, sample_surface_effect_volume(uvw - vec3(texel, 0.0, 0.0)).g * weight * x_weight);
+	sand = max(sand, sample_surface_effect_volume(uvw + vec3(0.0, texel, 0.0)).g * weight * y_weight);
+	sand = max(sand, sample_surface_effect_volume(uvw - vec3(0.0, texel, 0.0)).g * weight * y_weight);
+	sand = max(sand, sample_surface_effect_volume(uvw + vec3(0.0, 0.0, texel)).g * weight * z_weight);
+	sand = max(sand, sample_surface_effect_volume(uvw - vec3(0.0, 0.0, texel)).g * weight * z_weight);
+	sand = max(sand, sample_surface_effect_volume(uvw + vec3(texel * 2.0, 0.0, 0.0)).g * far_weight * x_weight);
+	sand = max(sand, sample_surface_effect_volume(uvw - vec3(texel * 2.0, 0.0, 0.0)).g * far_weight * x_weight);
+	sand = max(sand, sample_surface_effect_volume(uvw + vec3(0.0, texel * 2.0, 0.0)).g * far_weight * y_weight);
+	sand = max(sand, sample_surface_effect_volume(uvw - vec3(0.0, texel * 2.0, 0.0)).g * far_weight * y_weight);
+	sand = max(sand, sample_surface_effect_volume(uvw + vec3(0.0, 0.0, texel * 2.0)).g * far_weight * z_weight);
+	sand = max(sand, sample_surface_effect_volume(uvw - vec3(0.0, 0.0, texel * 2.0)).g * far_weight * z_weight);
+	return sand;
+}
+
+
+vec4 surface_effect_volume_masks(vec3 pos, vec3 normal_local) {
+	vec3 uvw = (pos - effect_volume_origin_local) * effect_volume_inv_size;
+	if (
+		uvw.x < 0.0 || uvw.x > 1.0 ||
+		uvw.y < 0.0 || uvw.y > 1.0 ||
+		uvw.z < 0.0 || uvw.z > 1.0
+	) {
+		return vec4(0.0);
+	}
+	vec4 masks = sample_surface_effect_volume(uvw);
+	masks.g = smoothed_sand_volume_mask(uvw, normal_local, masks.g);
+	return masks;
 }
 
 
@@ -168,12 +217,16 @@ float sample_channel(vec4 value, int channel) {
 
 void fragment() {
 	vec4 surface_event = surface_event_array_mask(effect_pos, normalize(effect_normal));
+	vec4 volume_masks = vec4(0.0);
 	if (use_surface_effect_volume) {
-		surface_event = surface_event_volume_mask(volume_pos);
+		volume_masks = surface_effect_volume_masks(volume_pos, normalize(effect_normal));
+		surface_event = color_from_effect_masks(vec4(volume_masks.r, 0.0, volume_masks.b, volume_masks.a));
 	}
 	float blood = surface_event.a;
 	float sand = 0.0;
-	if (!use_surface_effect_volume) {
+	if (use_surface_effect_volume) {
+		sand = volume_masks.g;
+	} else {
 		sand = sand_mask(world_pos, world_normal);
 	}
 	vec4 base_sample = base_color;

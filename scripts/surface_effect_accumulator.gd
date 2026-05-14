@@ -21,6 +21,10 @@ const REST_VOLUME_META := "_surface_effect_rest_volume"
 @export var max_effect_volume_layer_uploads_per_frame := 2
 @export var max_sand_accumulation_samples := 4096
 @export var sand_voxel_radius := 1
+@export var sand_smoothing_passes := 0
+@export var sand_smoothing_neighbor_weight := 0.72
+@export var smooth_sand_volume_in_material := true
+@export var sand_volume_smoothing_weight := 0.9
 @export var sand_exposure_cell_size := 0.08
 @export var sand_exposure_depth := 0.12
 @export var shader: Shader = preload("res://shaders/surface_effects.gdshader")
@@ -542,6 +546,8 @@ func _sync_surface_effect_resource_params() -> void:
 		if effect_volume_texture != null:
 			material.set_shader_parameter("surface_effect_volume", effect_volume_texture)
 			material.set_shader_parameter("effect_volume_depth", float(_clamped_effect_volume_resolution()))
+		material.set_shader_parameter("smooth_sand_volume", smooth_sand_volume_in_material)
+		material.set_shader_parameter("sand_volume_smoothing_weight", sand_volume_smoothing_weight)
 		material.set_shader_parameter("use_rest_volume_position", use_rest_volume_attributes and rest_attribute_vertex_count > 0)
 		material.set_shader_parameter("effect_volume_origin_local", effect_volume_origin_local)
 		material.set_shader_parameter("effect_volume_inv_size", effect_volume_inv_size)
@@ -746,6 +752,10 @@ func _accumulate_sand_to_effect_volume(min_travel: float = -INF) -> void:
 	var to_world_basis: Basis = character_root.global_transform.basis
 	var max_travel := sand_front + sand_front_softness
 	var sample_stride := _sand_sample_stride()
+	var use_cpu_smoothing := sand_smoothing_passes > 0
+	var sand_delta_layers: Array[PackedByteArray] = []
+	if use_cpu_smoothing:
+		sand_delta_layers = _make_sand_delta_layers()
 	for sample_index in range(0, sampler.local_positions.size(), sample_stride):
 		var local_position: Vector3 = sampler.local_positions[sample_index]
 		var world_position: Vector3 = character_root.to_global(local_position)
@@ -765,8 +775,14 @@ func _accumulate_sand_to_effect_volume(min_travel: float = -INF) -> void:
 		if mask <= 0.01:
 			continue
 
-		_write_effect_volume_brush(EFFECT_SAND_ID, local_position, mask, sand_voxel_radius)
+		if use_cpu_smoothing:
+			_write_sand_delta_brush(sand_delta_layers, local_position, mask, sand_voxel_radius)
+		else:
+			_write_sand_volume_brush(local_position, mask, sand_voxel_radius)
 
+	if use_cpu_smoothing:
+		_smooth_sand_delta_layers(sand_delta_layers)
+		_merge_sand_delta_to_effect_volume(sand_delta_layers)
 	_queue_dirty_effect_volume_layers()
 	effect_volume_dirty = false
 
@@ -867,10 +883,22 @@ func _write_effect_volume_sample(effect_id: int, local_position: Vector3, streng
 				effect_volume_dirty_layers[write_z] = true
 
 
-func _write_effect_volume_brush(effect_id: int, local_position: Vector3, strength: float, voxel_radius: int) -> void:
+func _make_sand_delta_layers() -> Array[PackedByteArray]:
+	var resolution := _clamped_effect_volume_resolution()
+	var layer_size := resolution * resolution
+	var layers: Array[PackedByteArray] = []
+	for _layer_index in resolution:
+		var data := PackedByteArray()
+		data.resize(layer_size)
+		data.fill(0)
+		layers.append(data)
+	return layers
+
+
+func _write_sand_volume_brush(local_position: Vector3, strength: float, voxel_radius: int) -> void:
 	var radius: int = maxi(0, voxel_radius)
 	if radius <= 0:
-		_write_effect_volume_sample(effect_id, local_position, strength)
+		_write_effect_volume_sample(EFFECT_SAND_ID, local_position, strength)
 		return
 
 	var uvw := _local_to_effect_volume_uv(local_position)
@@ -886,18 +914,18 @@ func _write_effect_volume_brush(effect_id: int, local_position: Vector3, strengt
 	var center_x := clampi(int(round(center_grid.x)), 0, resolution - 1)
 	var center_y := clampi(int(round(center_grid.y)), 0, resolution - 1)
 	var center_z := clampi(int(round(center_grid.z)), 0, resolution - 1)
-	var channel := _effect_volume_channel(effect_id)
+	var channel := _effect_volume_channel(EFFECT_SAND_ID)
 
 	if radius == 1:
 		_write_effect_volume_byte(center_x, center_y, center_z, channel, clamp(strength, 0.0, 1.0))
 		effect_volume_dirty_layers[center_z] = true
 		var neighbor_mask: float = clamp(strength * 0.45, 0.0, 1.0)
-		_write_effect_volume_neighbor(center_x - 1, center_y, center_z, channel, neighbor_mask, resolution)
-		_write_effect_volume_neighbor(center_x + 1, center_y, center_z, channel, neighbor_mask, resolution)
-		_write_effect_volume_neighbor(center_x, center_y - 1, center_z, channel, neighbor_mask, resolution)
-		_write_effect_volume_neighbor(center_x, center_y + 1, center_z, channel, neighbor_mask, resolution)
-		_write_effect_volume_neighbor(center_x, center_y, center_z - 1, channel, neighbor_mask, resolution)
-		_write_effect_volume_neighbor(center_x, center_y, center_z + 1, channel, neighbor_mask, resolution)
+		_write_sand_volume_neighbor(center_x - 1, center_y, center_z, channel, neighbor_mask, resolution)
+		_write_sand_volume_neighbor(center_x + 1, center_y, center_z, channel, neighbor_mask, resolution)
+		_write_sand_volume_neighbor(center_x, center_y - 1, center_z, channel, neighbor_mask, resolution)
+		_write_sand_volume_neighbor(center_x, center_y + 1, center_z, channel, neighbor_mask, resolution)
+		_write_sand_volume_neighbor(center_x, center_y, center_z - 1, channel, neighbor_mask, resolution)
+		_write_sand_volume_neighbor(center_x, center_y, center_z + 1, channel, neighbor_mask, resolution)
 		return
 
 	var min_x := clampi(center_x - radius, 0, resolution - 1)
@@ -923,11 +951,171 @@ func _write_effect_volume_brush(effect_id: int, local_position: Vector3, strengt
 				effect_volume_dirty_layers[write_z] = true
 
 
-func _write_effect_volume_neighbor(x: int, y: int, z: int, channel: int, mask: float, resolution: int) -> void:
+func _write_sand_volume_neighbor(x: int, y: int, z: int, channel: int, mask: float, resolution: int) -> void:
 	if x < 0 or x >= resolution or y < 0 or y >= resolution or z < 0 or z >= resolution:
 		return
 	_write_effect_volume_byte(x, y, z, channel, mask)
 	effect_volume_dirty_layers[z] = true
+
+
+func _write_sand_delta_brush(delta_layers: Array[PackedByteArray], local_position: Vector3, strength: float, voxel_radius: int) -> void:
+	var radius: int = maxi(0, voxel_radius)
+	if radius <= 0:
+		_write_sand_delta_sample(delta_layers, local_position, strength)
+		return
+
+	var uvw := _local_to_effect_volume_uv(local_position)
+	if uvw.x < 0.0 or uvw.x > 1.0 or uvw.y < 0.0 or uvw.y > 1.0 or uvw.z < 0.0 or uvw.z > 1.0:
+		return
+
+	var resolution := _clamped_effect_volume_resolution()
+	var center_grid := Vector3(
+		uvw.x * float(resolution) - 0.5,
+		uvw.y * float(resolution) - 0.5,
+		uvw.z * float(resolution) - 0.5
+	)
+	var center_x := clampi(int(round(center_grid.x)), 0, resolution - 1)
+	var center_y := clampi(int(round(center_grid.y)), 0, resolution - 1)
+	var center_z := clampi(int(round(center_grid.z)), 0, resolution - 1)
+
+	if radius == 1:
+		_write_sand_delta_byte(delta_layers, center_x, center_y, center_z, clamp(strength, 0.0, 1.0), resolution)
+		var neighbor_mask: float = clamp(strength * 0.45, 0.0, 1.0)
+		_write_sand_delta_byte(delta_layers, center_x - 1, center_y, center_z, neighbor_mask, resolution)
+		_write_sand_delta_byte(delta_layers, center_x + 1, center_y, center_z, neighbor_mask, resolution)
+		_write_sand_delta_byte(delta_layers, center_x, center_y - 1, center_z, neighbor_mask, resolution)
+		_write_sand_delta_byte(delta_layers, center_x, center_y + 1, center_z, neighbor_mask, resolution)
+		_write_sand_delta_byte(delta_layers, center_x, center_y, center_z - 1, neighbor_mask, resolution)
+		_write_sand_delta_byte(delta_layers, center_x, center_y, center_z + 1, neighbor_mask, resolution)
+		return
+
+	var min_x := clampi(center_x - radius, 0, resolution - 1)
+	var max_x := clampi(center_x + radius, 0, resolution - 1)
+	var min_y := clampi(center_y - radius, 0, resolution - 1)
+	var max_y := clampi(center_y + radius, 0, resolution - 1)
+	var min_z := clampi(center_z - radius, 0, resolution - 1)
+	var max_z := clampi(center_z + radius, 0, resolution - 1)
+	var max_distance := float(radius) + 0.65
+
+	for write_z in range(min_z, max_z + 1):
+		for write_y in range(min_y, max_y + 1):
+			for write_x in range(min_x, max_x + 1):
+				var voxel_grid := Vector3(float(write_x), float(write_y), float(write_z))
+				var distance := voxel_grid.distance_to(center_grid)
+				if distance > max_distance:
+					continue
+				var falloff: float = 1.0 - _smoothstep(0.0, max_distance, distance)
+				var mask: float = clamp(strength * falloff, 0.0, 1.0)
+				if mask <= 0.0:
+					continue
+				_write_sand_delta_byte(delta_layers, write_x, write_y, write_z, mask, resolution)
+
+
+func _write_sand_delta_sample(delta_layers: Array[PackedByteArray], local_position: Vector3, strength: float) -> void:
+	var uvw := _local_to_effect_volume_uv(local_position)
+	if uvw.x < 0.0 or uvw.x > 1.0 or uvw.y < 0.0 or uvw.y > 1.0 or uvw.z < 0.0 or uvw.z > 1.0:
+		return
+
+	var resolution := _clamped_effect_volume_resolution()
+	var x := clampi(int(floor(uvw.x * float(resolution))), 0, resolution - 1)
+	var y := clampi(int(floor(uvw.y * float(resolution))), 0, resolution - 1)
+	var z := clampi(int(floor(uvw.z * float(resolution))), 0, resolution - 1)
+	_write_sand_delta_byte(delta_layers, x, y, z, strength, resolution)
+
+
+func _write_sand_delta_byte(delta_layers: Array[PackedByteArray], x: int, y: int, z: int, mask: float, resolution: int) -> void:
+	if x < 0 or x >= resolution or y < 0 or y >= resolution or z < 0 or z >= resolution:
+		return
+	var value := clampi(int(round(clamp(mask, 0.0, 1.0) * 255.0)), 0, 255)
+	var byte_index := y * resolution + x
+	var data := delta_layers[z]
+	if value > data[byte_index]:
+		data[byte_index] = value
+
+
+func _smooth_sand_delta_layers(delta_layers: Array[PackedByteArray]) -> void:
+	var passes := maxi(0, sand_smoothing_passes)
+	for _pass_index in range(passes):
+		_smooth_sand_delta_axis_x(delta_layers)
+		_smooth_sand_delta_axis_y(delta_layers)
+		_smooth_sand_delta_axis_z(delta_layers)
+
+
+func _smooth_sand_delta_axis_x(delta_layers: Array[PackedByteArray]) -> void:
+	var resolution := _clamped_effect_volume_resolution()
+	var weight: float = clamp(sand_smoothing_neighbor_weight, 0.0, 1.0)
+	for layer_index in delta_layers.size():
+		var source: PackedByteArray = delta_layers[layer_index]
+		var smoothed := source.duplicate()
+		for y in resolution:
+			var row := y * resolution
+			for x in resolution:
+				var byte_index := row + x
+				var value: int = source[byte_index]
+				if x > 0:
+					value = maxi(value, int(round(float(source[byte_index - 1]) * weight)))
+				if x < resolution - 1:
+					value = maxi(value, int(round(float(source[byte_index + 1]) * weight)))
+				smoothed[byte_index] = value
+		delta_layers[layer_index] = smoothed
+
+
+func _smooth_sand_delta_axis_y(delta_layers: Array[PackedByteArray]) -> void:
+	var resolution := _clamped_effect_volume_resolution()
+	var weight: float = clamp(sand_smoothing_neighbor_weight, 0.0, 1.0)
+	for layer_index in delta_layers.size():
+		var source: PackedByteArray = delta_layers[layer_index]
+		var smoothed := source.duplicate()
+		for y in resolution:
+			for x in resolution:
+				var byte_index := y * resolution + x
+				var value: int = source[byte_index]
+				if y > 0:
+					value = maxi(value, int(round(float(source[byte_index - resolution]) * weight)))
+				if y < resolution - 1:
+					value = maxi(value, int(round(float(source[byte_index + resolution]) * weight)))
+				smoothed[byte_index] = value
+		delta_layers[layer_index] = smoothed
+
+
+func _smooth_sand_delta_axis_z(delta_layers: Array[PackedByteArray]) -> void:
+	var resolution := _clamped_effect_volume_resolution()
+	var layer_size := resolution * resolution
+	var weight: float = clamp(sand_smoothing_neighbor_weight, 0.0, 1.0)
+	var source_layers: Array[PackedByteArray] = []
+	for layer in delta_layers:
+		source_layers.append(layer.duplicate())
+
+	for z in resolution:
+		var source: PackedByteArray = source_layers[z]
+		var smoothed := source.duplicate()
+		for byte_index in layer_size:
+			var value: int = source[byte_index]
+			if z > 0:
+				value = maxi(value, int(round(float(source_layers[z - 1][byte_index]) * weight)))
+			if z < resolution - 1:
+				value = maxi(value, int(round(float(source_layers[z + 1][byte_index]) * weight)))
+			smoothed[byte_index] = value
+		delta_layers[z] = smoothed
+
+
+func _merge_sand_delta_to_effect_volume(delta_layers: Array[PackedByteArray]) -> void:
+	var resolution := _clamped_effect_volume_resolution()
+	var channel := _effect_volume_channel(EFFECT_SAND_ID)
+	for z in mini(delta_layers.size(), effect_volume_layer_data.size()):
+		var delta_data: PackedByteArray = delta_layers[z]
+		var volume_data: PackedByteArray = effect_volume_layer_data[z]
+		var wrote_layer := false
+		for sample_index in delta_data.size():
+			var value: int = delta_data[sample_index]
+			if value <= 0:
+				continue
+			var byte_index := sample_index * 4 + channel
+			if value > volume_data[byte_index]:
+				volume_data[byte_index] = value
+				wrote_layer = true
+		if wrote_layer:
+			effect_volume_dirty_layers[z] = true
 
 
 func _write_effect_volume_byte(x: int, y: int, z: int, channel: int, mask: float) -> void:
