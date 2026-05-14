@@ -52,23 +52,40 @@ func _run() -> void:
 		0.12,
 		1.0
 	)
-	var local_before := _first_event_center(mesh_instance)
-	_assert(local_before.distance_to(root.to_local(attached_world)) < 0.001, "attached event was not initialized on the selected triangle")
+	var visual_before: Vector3 = root.to_local(attached_world)
+	var rest_center_local := _rest_triangle_center_local(
+		root,
+		mesh_instance,
+		candidate["surface_index"],
+		candidate["triangle_indices"],
+		Vector3.ONE / 3.0
+	)
+	var volume_before := accumulator.sample_effect_volume_local(rest_center_local)
+	_assert(volume_before.a > 0.1, "attached event was not accumulated at the rest-space triangle position")
+	_assert(_uses_rest_volume_position(mesh_instance, candidate["surface_index"]), "attached material is not sampling rest-space volume coordinates")
 
 	_seek_animation(player, 0.45)
 	for frame in range(12):
 		await process_frame
 
-	var local_after := _first_event_center(mesh_instance)
-	var attachment_delta := local_before.distance_to(local_after)
-	_assert(attachment_delta > 0.02, "attached event did not follow skinned deformation")
+	var visual_after: Vector3 = root.to_local(_triangle_center_world(
+		accumulator,
+		mesh_instance,
+		candidate["surface_index"],
+		candidate["triangle_indices"]
+	))
+	var attachment_delta: float = visual_before.distance_to(visual_after)
+	var volume_after := accumulator.sample_effect_volume_local(rest_center_local)
+	_assert(attachment_delta > 0.02, "selected triangle did not move enough to validate skinned deformation")
+	_assert(volume_after.a > 0.1, "rest-space volume event did not persist after skinned deformation")
 
-	print("skinned_surface_attachment: surface=%d movement=%.3f attachment_delta=%.3f before=%s after=%s" % [
+	print("skinned_surface_attachment: surface=%d movement=%.3f attachment_delta=%.3f rest_alpha=%.3f before=%s after=%s" % [
 		int(candidate["surface_index"]),
 		float(candidate["movement"]),
 		attachment_delta,
-		str(local_before),
-		str(local_after),
+		volume_after.a,
+		str(visual_before),
+		str(visual_after),
 	])
 
 	root.queue_free()
@@ -144,12 +161,40 @@ func _sample_triangle_centers(accumulator: SurfaceEffectAccumulator, mesh_instan
 	return centers
 
 
-func _first_event_center(mesh_instance: MeshInstance3D) -> Vector3:
-	var material := mesh_instance.get_surface_override_material(0) as ShaderMaterial
+func _triangle_center_world(
+	accumulator: SurfaceEffectAccumulator,
+	mesh_instance: MeshInstance3D,
+	surface_index: int,
+	triangle_indices: PackedInt32Array
+) -> Vector3:
+	var arrays := mesh_instance.mesh.surface_get_arrays(surface_index)
+	return (
+		accumulator.resolve_vertex_world(mesh_instance, arrays, triangle_indices[0], surface_index)
+		+ accumulator.resolve_vertex_world(mesh_instance, arrays, triangle_indices[1], surface_index)
+		+ accumulator.resolve_vertex_world(mesh_instance, arrays, triangle_indices[2], surface_index)
+	) / 3.0
+
+
+func _rest_triangle_center_local(
+	root: Node3D,
+	mesh_instance: MeshInstance3D,
+	surface_index: int,
+	triangle_indices: PackedInt32Array,
+	barycentric: Vector3
+) -> Vector3:
+	var arrays := mesh_instance.mesh.surface_get_arrays(surface_index)
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var to_character := root.global_transform.affine_inverse() * mesh_instance.global_transform
+	var p0 := to_character * vertices[triangle_indices[0]]
+	var p1 := to_character * vertices[triangle_indices[1]]
+	var p2 := to_character * vertices[triangle_indices[2]]
+	return p0 * barycentric.x + p1 * barycentric.y + p2 * barycentric.z
+
+
+func _uses_rest_volume_position(mesh_instance: MeshInstance3D, surface_index: int) -> bool:
+	var material := mesh_instance.get_surface_override_material(surface_index) as ShaderMaterial
 	_assert(material != null, "Sophia material was not rebound")
-	var spheres: PackedVector4Array = material.get_shader_parameter("impact_spheres")
-	_assert(not spheres.is_empty(), "attached event uniform was not pushed")
-	return Vector3(spheres[0].x, spheres[0].y, spheres[0].z)
+	return bool(material.get_shader_parameter("use_rest_volume_position"))
 
 
 func _collect(

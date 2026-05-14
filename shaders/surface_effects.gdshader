@@ -35,6 +35,7 @@ uniform vec4 impact_dirs[MAX_IMPACTS];
 uniform vec4 impact_meta[MAX_IMPACTS];
 uniform bool use_surface_effect_volume = false;
 uniform sampler3D surface_effect_volume;
+uniform bool use_rest_volume_position = false;
 uniform vec3 effect_volume_origin_local = vec3(-1.0, -1.0, -1.0);
 uniform vec3 effect_volume_inv_size = vec3(0.5, 0.5, 0.5);
 uniform mat4 character_inverse_world = mat4(1.0);
@@ -47,6 +48,7 @@ varying vec3 world_pos;
 varying vec3 world_normal;
 varying vec3 effect_pos;
 varying vec3 effect_normal;
+varying vec3 volume_pos;
 
 
 void vertex() {
@@ -54,6 +56,10 @@ void vertex() {
 	world_normal = normalize(MODEL_NORMAL_MATRIX * NORMAL);
 	effect_pos = (character_inverse_world * vec4(world_pos, 1.0)).xyz;
 	effect_normal = normalize((character_inverse_world * vec4(world_normal, 0.0)).xyz);
+	volume_pos = effect_pos;
+	if (use_rest_volume_position) {
+		volume_pos = CUSTOM0.rgb;
+	}
 }
 
 
@@ -156,7 +162,7 @@ float sample_channel(vec4 value, int channel) {
 void fragment() {
 	vec4 surface_event = surface_event_array_mask(effect_pos, normalize(effect_normal));
 	if (use_surface_effect_volume) {
-		surface_event = surface_event_volume_mask(effect_pos);
+		surface_event = surface_event_volume_mask(volume_pos);
 	}
 	float blood = surface_event.a;
 	float sand = sand_mask(world_pos, world_normal);

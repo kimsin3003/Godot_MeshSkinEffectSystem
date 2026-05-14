@@ -9,7 +9,7 @@
   "render_animated_real_asset_smoke": {
     "pose_delta": [4.0, 5.5],
     "non_background": [1800, 2600],
-    "impact_samples": [40, 180]
+    "impact_samples": [180, 320]
   },
   "render_sand_mask_smoke": {
     "left_early": [0.07, 0.10],

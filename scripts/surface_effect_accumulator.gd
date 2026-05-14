@@ -6,13 +6,16 @@ const DEFAULT_IMPACT_RADIUS_M := 0.05
 const DEFAULT_SAMPLE_LIMIT := 8192
 const DEFAULT_EFFECT_VOLUME_RESOLUTION := 48
 const EFFECT_BULLET_IMPACT_ID := 1
+const EFFECT_SAND_ID := 2
 const EMPTY_EFFECT_VOLUME_COLOR := Color(0.0, 0.0, 0.0, 0.0)
 
 @export var character_root: Node3D
 @export var deformation_provider: Node
 @export var sample_limit := DEFAULT_SAMPLE_LIMIT
 @export var effect_volume_resolution := DEFAULT_EFFECT_VOLUME_RESOLUTION
+@export var use_rest_volume_attributes := true
 @export var impact_radius_m := DEFAULT_IMPACT_RADIUS_M
+@export var sand_front_softness := 0.45
 @export var shader: Shader = preload("res://shaders/surface_effects.gdshader")
 
 var sampler := MeshSurfaceSampler.new()
@@ -28,6 +31,8 @@ var effect_volume_origin_local := Vector3(-1.0, -1.0, -1.0)
 var effect_volume_size_local := Vector3(2.0, 2.0, 2.0)
 var effect_volume_inv_size := Vector3(0.5, 0.5, 0.5)
 var effect_volume_dirty := true
+var rest_attribute_vertex_count := 0
+var total_surface_event_count := 0
 var sand_direction_world := Vector3(1, 0, 0)
 var sand_front := -10.0
 var sand_amount := 0.0
@@ -40,9 +45,6 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	if character_root != null and not shader_materials.is_empty():
-		_rebuild_event_uniform_arrays()
-		if effect_volume_dirty or _has_attached_events():
-			_rebuild_effect_volume()
 		_sync_impact_params()
 		_sync_transform_params()
 
@@ -52,6 +54,7 @@ func rebuild_for_character(root: Node3D) -> void:
 	clear_impacts()
 	sampler.rebuild(root, sample_limit)
 	_rebuild_effect_volume_storage(root)
+	_ensure_rest_volume_attributes(root)
 	_rebuild_materials(root)
 	_sync_all_shader_params()
 
@@ -65,7 +68,7 @@ func get_material_instance_count() -> int:
 
 
 func get_impact_count() -> int:
-	return surface_events.size()
+	return total_surface_event_count
 
 
 func estimate_memory_bytes() -> int:
@@ -73,7 +76,8 @@ func estimate_memory_bytes() -> int:
 	var impact_bytes := MAX_IMPACTS * 32
 	var volume_resolution := _clamped_effect_volume_resolution()
 	var volume_bytes := volume_resolution * volume_resolution * volume_resolution * 4
-	return sampler_bytes + impact_bytes + volume_bytes
+	var rest_attribute_bytes := rest_attribute_vertex_count * 16 if use_rest_volume_attributes else 0
+	return sampler_bytes + impact_bytes + volume_bytes + rest_attribute_bytes
 
 
 func clear_impacts() -> void:
@@ -82,6 +86,7 @@ func clear_impacts() -> void:
 	impact_dirs.clear()
 	impact_meta.clear()
 	impact_cursor = 0
+	total_surface_event_count = 0
 	effect_volume_dirty = true
 	_rebuild_effect_volume()
 	_sync_impact_params()
@@ -161,7 +166,8 @@ func add_surface_effect_at_triangle(
 		"barycentric": barycentric,
 	}
 	var visual_hit_world := _resolve_attachment_world(attachment)
-	_store_surface_event(effect_id, visual_hit_world, direction_world, radius_m, strength, attachment)
+	var rest_center_local: Vector3 = _resolve_attachment_rest_local(attachment)
+	_store_surface_event_local(effect_id, rest_center_local, direction_world, radius_m, strength, attachment)
 	return visual_hit_world
 
 
@@ -186,16 +192,28 @@ func _store_surface_event(
 	attachment: Dictionary
 ) -> void:
 	var local_center := character_root.to_local(center_world)
+	_store_surface_event_local(effect_id, local_center, direction_world, radius_m, strength, attachment)
+
+
+func _store_surface_event_local(
+	effect_id: int,
+	center_local: Vector3,
+	direction_world: Vector3,
+	radius_m: float,
+	strength: float,
+	attachment: Dictionary
+) -> void:
 	var local_dir := (character_root.global_transform.basis.inverse() * direction_world.normalized()).normalized()
 	var record := {
 		"effect_id": effect_id,
-		"center_local": local_center,
+		"center_local": center_local,
 		"direction_local": local_dir,
 		"radius": radius_m,
 		"strength": clamp(strength, 0.0, 4.0),
 		"attachment": attachment,
 	}
 
+	total_surface_event_count += 1
 	if surface_events.size() < MAX_IMPACTS:
 		surface_events.append(record)
 	else:
@@ -203,7 +221,7 @@ func _store_surface_event(
 		impact_cursor = (impact_cursor + 1) % MAX_IMPACTS
 
 	_rebuild_event_uniform_arrays()
-	_rebuild_effect_volume()
+	_splat_record_to_effect_volume(record)
 	_sync_impact_params()
 
 
@@ -212,6 +230,8 @@ func set_sand_state(direction_world: Vector3, front: float, amount: float) -> vo
 		sand_direction_world = direction_world.normalized()
 	sand_front = front
 	sand_amount = clamp(amount, 0.0, 1.0)
+	if sand_amount > 0.0:
+		_accumulate_sand_to_effect_volume()
 	_sync_sand_params()
 
 
@@ -324,6 +344,7 @@ func _sync_impact_params() -> void:
 		material.set_shader_parameter("use_surface_effect_volume", effect_volume_texture != null)
 		if effect_volume_texture != null:
 			material.set_shader_parameter("surface_effect_volume", effect_volume_texture)
+		material.set_shader_parameter("use_rest_volume_position", use_rest_volume_attributes and rest_attribute_vertex_count > 0)
 		material.set_shader_parameter("effect_volume_origin_local", effect_volume_origin_local)
 		material.set_shader_parameter("effect_volume_inv_size", effect_volume_inv_size)
 
@@ -429,10 +450,34 @@ func _rebuild_effect_volume() -> void:
 	effect_volume_dirty = false
 
 
+func _splat_record_to_effect_volume(record: Dictionary) -> void:
+	if effect_volume_texture == null or effect_volume_images.is_empty():
+		return
+
+	var center_local: Vector3 = record["center_local"]
+	_splat_effect_to_volume(
+		int(record["effect_id"]),
+		center_local,
+		float(record["radius"]),
+		float(record["strength"])
+	)
+	effect_volume_texture.update(effect_volume_images)
+	effect_volume_dirty = false
+
+
 func _splat_event_to_effect_volume(event_index: int) -> void:
 	var sphere := impact_spheres[event_index]
 	var radius: float = max(sphere.w, 0.001)
 	var center := Vector3(sphere.x, sphere.y, sphere.z)
+	_splat_effect_to_volume(
+		int(floor(impact_meta[event_index].x + 0.5)),
+		center,
+		radius,
+		clamp(impact_dirs[event_index].w, 0.0, 4.0)
+	)
+
+
+func _splat_effect_to_volume(effect_id: int, center: Vector3, radius: float, strength: float) -> void:
 	var uvw := _local_to_effect_volume_uv(center)
 	var resolution := _clamped_effect_volume_resolution()
 	var radius_uv := Vector3(
@@ -447,8 +492,8 @@ func _splat_event_to_effect_volume(event_index: int) -> void:
 	var max_y := clampi(int(ceil((uvw.y + radius_uv.y) * float(resolution))), 0, resolution - 1)
 	var min_z := clampi(int(floor((uvw.z - radius_uv.z) * float(resolution))), 0, resolution - 1)
 	var max_z := clampi(int(ceil((uvw.z + radius_uv.z) * float(resolution))), 0, resolution - 1)
-	var channel := _effect_volume_channel(int(floor(impact_meta[event_index].x + 0.5)))
-	var strength: float = clamp(impact_dirs[event_index].w, 0.0, 4.0)
+	var channel := _effect_volume_channel(effect_id)
+	var clamped_strength: float = clamp(strength, 0.0, 4.0)
 
 	for z in range(min_z, max_z + 1):
 		var local_z := effect_volume_origin_local.z + (float(z) + 0.5) / float(resolution) * effect_volume_size_local.z
@@ -458,7 +503,7 @@ func _splat_event_to_effect_volume(event_index: int) -> void:
 				var local_x := effect_volume_origin_local.x + (float(x) + 0.5) / float(resolution) * effect_volume_size_local.x
 				var local_position := Vector3(local_x, local_y, local_z)
 				var distance01: float = local_position.distance_to(center) / radius
-				var mask: float = (1.0 - _smoothstep(0.55, 1.0, distance01)) * strength
+				var mask: float = (1.0 - _smoothstep(0.55, 1.0, distance01)) * clamped_strength
 				if mask <= 0.0:
 					continue
 
@@ -476,6 +521,72 @@ func _splat_event_to_effect_volume(event_index: int) -> void:
 				image.set_pixel(x, y, color)
 
 
+func _accumulate_sand_to_effect_volume() -> void:
+	if character_root == null or effect_volume_texture == null or effect_volume_images.is_empty():
+		return
+	if sampler.local_positions.is_empty():
+		return
+
+	var direction_world: Vector3 = sand_direction_world.normalized()
+	if direction_world.length_squared() <= 0.000001:
+		return
+
+	var to_world_basis: Basis = character_root.global_transform.basis
+	for sample_index in sampler.local_positions.size():
+		var local_position: Vector3 = sampler.local_positions[sample_index]
+		var world_position: Vector3 = character_root.to_global(local_position)
+		var travel: float = world_position.dot(direction_world)
+		var front_mask: float = 1.0 - _smoothstep(sand_front, sand_front + sand_front_softness, travel)
+		if front_mask <= 0.0:
+			continue
+
+		var normal_world: Vector3 = (to_world_basis * sampler.local_normals[sample_index]).normalized()
+		var normal_factor: float = 1.0 - abs(normal_world.dot(direction_world))
+		var mask: float = clamp(front_mask * normal_factor * sand_amount, 0.0, 1.0)
+		if mask <= 0.01:
+			continue
+
+		_write_effect_volume_sample(EFFECT_SAND_ID, local_position, mask, 1)
+
+	effect_volume_texture.update(effect_volume_images)
+	effect_volume_dirty = false
+
+
+func _write_effect_volume_sample(effect_id: int, local_position: Vector3, strength: float, voxel_radius: int = 0) -> void:
+	var uvw := _local_to_effect_volume_uv(local_position)
+	if uvw.x < 0.0 or uvw.x > 1.0 or uvw.y < 0.0 or uvw.y > 1.0 or uvw.z < 0.0 or uvw.z > 1.0:
+		return
+
+	var resolution := _clamped_effect_volume_resolution()
+	var x := clampi(int(floor(uvw.x * float(resolution))), 0, resolution - 1)
+	var y := clampi(int(floor(uvw.y * float(resolution))), 0, resolution - 1)
+	var z := clampi(int(floor(uvw.z * float(resolution))), 0, resolution - 1)
+	var mask: float = clamp(strength, 0.0, 1.0)
+	var channel: int = _effect_volume_channel(effect_id)
+	var min_x: int = clampi(x - voxel_radius, 0, resolution - 1)
+	var max_x: int = clampi(x + voxel_radius, 0, resolution - 1)
+	var min_y: int = clampi(y - voxel_radius, 0, resolution - 1)
+	var max_y: int = clampi(y + voxel_radius, 0, resolution - 1)
+	var min_z: int = clampi(z - voxel_radius, 0, resolution - 1)
+	var max_z: int = clampi(z + voxel_radius, 0, resolution - 1)
+
+	for write_z in range(min_z, max_z + 1):
+		var image := effect_volume_images[write_z]
+		for write_y in range(min_y, max_y + 1):
+			for write_x in range(min_x, max_x + 1):
+				var color := image.get_pixel(write_x, write_y)
+				match channel:
+					0:
+						color.r = max(color.r, mask)
+					1:
+						color.g = max(color.g, mask)
+					2:
+						color.b = max(color.b, mask)
+					_:
+						color.a = max(color.a, mask)
+				image.set_pixel(write_x, write_y, color)
+
+
 func _local_to_effect_volume_uv(local_position: Vector3) -> Vector3:
 	return Vector3(
 		(local_position.x - effect_volume_origin_local.x) * effect_volume_inv_size.x,
@@ -486,14 +597,6 @@ func _local_to_effect_volume_uv(local_position: Vector3) -> Vector3:
 
 func _effect_volume_channel(effect_id: int) -> int:
 	return clampi(effect_id - 1, 0, 3)
-
-
-func _has_attached_events() -> bool:
-	for record in surface_events:
-		var attachment: Dictionary = record["attachment"]
-		if not attachment.is_empty():
-			return true
-	return false
 
 
 func _smoothstep(edge0: float, edge1: float, value: float) -> float:
@@ -518,6 +621,60 @@ func _aabb_corners(bounds: AABB) -> Array[Vector3]:
 	]
 
 
+func _ensure_rest_volume_attributes(root: Node3D) -> void:
+	rest_attribute_vertex_count = 0
+	if not use_rest_volume_attributes:
+		return
+
+	var meshes: Array[MeshInstance3D] = []
+	_collect_meshes(root, meshes)
+	for mesh_instance in meshes:
+		_add_rest_volume_attributes(mesh_instance)
+
+
+func _add_rest_volume_attributes(mesh_instance: MeshInstance3D) -> void:
+	var source_mesh := mesh_instance.mesh
+	if source_mesh == null:
+		return
+
+	var array_mesh := ArrayMesh.new()
+	array_mesh.resource_name = source_mesh.resource_name + "_RestVolume"
+	var to_character := character_root.global_transform.affine_inverse() * mesh_instance.global_transform
+
+	for surface_index in source_mesh.get_surface_count():
+		var arrays := source_mesh.surface_get_arrays(surface_index)
+		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		if vertices.is_empty():
+			continue
+
+		var rest_positions := PackedFloat32Array()
+		rest_positions.resize(vertices.size() * 4)
+		for vertex_index in vertices.size():
+			var local_position := to_character * vertices[vertex_index]
+			var base_index := vertex_index * 4
+			rest_positions[base_index] = local_position.x
+			rest_positions[base_index + 1] = local_position.y
+			rest_positions[base_index + 2] = local_position.z
+			rest_positions[base_index + 3] = 1.0
+
+		arrays[Mesh.ARRAY_CUSTOM0] = rest_positions
+		var primitive := Mesh.PRIMITIVE_TRIANGLES
+		if source_mesh.has_method("surface_get_primitive_type"):
+			primitive = source_mesh.call("surface_get_primitive_type", surface_index)
+		var flags := Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT
+		array_mesh.add_surface_from_arrays(
+			primitive,
+			arrays,
+			[],
+			{},
+			flags
+		)
+		array_mesh.surface_set_material(surface_index, source_mesh.surface_get_material(surface_index))
+		rest_attribute_vertex_count += vertices.size()
+
+	mesh_instance.mesh = array_mesh
+
+
 func _resolve_attachment_world(attachment: Dictionary) -> Vector3:
 	var mesh_instance: MeshInstance3D = attachment["mesh_instance"]
 	if not is_instance_valid(mesh_instance):
@@ -538,6 +695,30 @@ func _resolve_attachment_world(attachment: Dictionary) -> Vector3:
 	var p0 := resolve_vertex_world(mesh_instance, arrays, triangle_indices[0], surface_index)
 	var p1 := resolve_vertex_world(mesh_instance, arrays, triangle_indices[1], surface_index)
 	var p2 := resolve_vertex_world(mesh_instance, arrays, triangle_indices[2], surface_index)
+	return p0 * barycentric.x + p1 * barycentric.y + p2 * barycentric.z
+
+
+func _resolve_attachment_rest_local(attachment: Dictionary) -> Vector3:
+	var mesh_instance: MeshInstance3D = attachment["mesh_instance"]
+	if not is_instance_valid(mesh_instance):
+		return Vector3.ZERO
+
+	var surface_index: int = attachment["surface_index"]
+	var triangle_indices: PackedInt32Array = attachment["triangle_indices"]
+	var barycentric: Vector3 = attachment["barycentric"]
+	var mesh := mesh_instance.mesh
+	if mesh == null or surface_index < 0 or surface_index >= mesh.get_surface_count():
+		return character_root.to_local(mesh_instance.global_position)
+
+	var arrays := mesh.surface_get_arrays(surface_index)
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	if triangle_indices[0] >= vertices.size() or triangle_indices[1] >= vertices.size() or triangle_indices[2] >= vertices.size():
+		return character_root.to_local(mesh_instance.global_position)
+
+	var to_character := character_root.global_transform.affine_inverse() * mesh_instance.global_transform
+	var p0 := to_character * vertices[triangle_indices[0]]
+	var p1 := to_character * vertices[triangle_indices[1]]
+	var p2 := to_character * vertices[triangle_indices[2]]
 	return p0 * barycentric.x + p1 * barycentric.y + p2 * barycentric.z
 
 
@@ -650,3 +831,4 @@ func _sync_sand_params() -> void:
 		material.set_shader_parameter("sand_direction_world", sand_direction_world)
 		material.set_shader_parameter("sand_front", sand_front)
 		material.set_shader_parameter("sand_amount", sand_amount)
+		material.set_shader_parameter("sand_front_softness", sand_front_softness)

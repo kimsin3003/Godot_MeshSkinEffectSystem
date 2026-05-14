@@ -2,9 +2,11 @@
 
 Godot 4 prototype for UV-independent accumulated surface effects on runtime-generated skinned characters.
 
-The prototype keeps per-character state below 1 MB by storing compact effect records, sparse exterior mesh samples, and one shared 48³ RGBA8 effect volume instead of allocating per-slot render targets.
+The prototype keeps the included validation characters below 1 MB by storing sparse exterior mesh samples, one shared 48^3 RGBA8 effect volume, and a small debug event ring instead of allocating per-slot render targets.
 
-The default material path is O(1) per fragment: it samples the shared 3D effect volume once, where RGBA channels represent effect classes 1-4. The compact event uniforms are still provided for debugging and custom materials that need raw position/radius/direction/effect-id records.
+The default material path is O(1) per fragment: it samples the shared 3D effect volume once, where RGBA channels represent effect classes 1-4. Bullet impacts and sand accumulation both write into this volume. The compact event uniforms are still provided for debugging and custom materials that need recent raw position/radius/direction/effect-id records; the 32-event ring is not the accumulation limit.
+
+For animation/deformation, the Godot prototype injects character-local rest position into `CUSTOM0` at runtime and samples the volume with that coordinate. This proves the data model, but a 400k-vertex production character cannot afford float4 `CUSTOM0` under a 1 MB budget; the Unreal version should use engine-provided pre-skinned/rest position or a compressed vertex stream.
 
 See `docs/goal.md` for the translated feature goal and implementation constraints.
 See `docs/verification.md` for the current requirement-to-test matrix.

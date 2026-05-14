@@ -13,6 +13,8 @@ func _run() -> void:
 	_test_layered_outer_surface()
 	_test_multi_material_slot_binding()
 	_test_artist_effect_metadata_binding()
+	_test_volume_accumulates_past_debug_event_limit()
+	_test_sand_accumulates_in_shared_volume()
 	_test_material_preservation()
 	quit(1 if failed else 0)
 
@@ -139,6 +141,90 @@ func _test_artist_effect_metadata_binding() -> void:
 	accumulator.queue_free()
 
 
+func _test_volume_accumulates_past_debug_event_limit() -> void:
+	var root := Node3D.new()
+	root.name = "PersistentVolumeCharacter"
+	var split_shell := _make_split_slot_shell()
+	root.add_child(split_shell)
+	get_root().add_child(root)
+
+	var accumulator: SurfaceEffectAccumulator = SurfaceEffectAccumulatorScript.new()
+	accumulator.sample_limit = 256
+	get_root().add_child(accumulator)
+	accumulator.rebuild_for_character(root)
+
+	var first_local := Vector3(-0.5, -0.055, -0.018)
+	accumulator.add_surface_effect_at_visual_surface(
+		2,
+		root.to_global(first_local),
+		Vector3.LEFT,
+		0.045,
+		1.0
+	)
+
+	for event_index in range(1, 80):
+		var y: float = lerp(-0.055, 0.055, float(event_index % 16) / 15.0)
+		var z_step := int(event_index / 16) % 5
+		var z: float = lerp(-0.018, 0.018, float(z_step) / 4.0)
+		accumulator.add_surface_effect_at_visual_surface(
+			1,
+			root.to_global(Vector3(-0.5, y, z)),
+			Vector3.LEFT,
+			0.035,
+			1.0
+		)
+
+	_assert(accumulator.get_impact_count() == 80, "persistent event count did not include all accumulated events")
+	var material := split_shell.get_surface_override_material(0) as ShaderMaterial
+	_assert(material != null, "persistent volume material was not rebound")
+	_assert(material.get_shader_parameter("impact_count") == SurfaceEffectAccumulator.MAX_IMPACTS, "debug event uniform should keep only the recent ring")
+
+	var first_volume_sample := accumulator.sample_effect_volume_local(first_local)
+	_assert(first_volume_sample.g > 0.1, "first event was lost after the debug event ring wrapped")
+	print("volume_accumulates_past_debug_limit: total=%d debug=%d first_g=%.3f" % [
+		accumulator.get_impact_count(),
+		int(material.get_shader_parameter("impact_count")),
+		first_volume_sample.g,
+	])
+
+	root.queue_free()
+	accumulator.queue_free()
+
+
+func _test_sand_accumulates_in_shared_volume() -> void:
+	var root := Node3D.new()
+	root.name = "PersistentSandCharacter"
+	var panel := _make_sand_panel()
+	root.add_child(panel)
+	get_root().add_child(root)
+
+	var accumulator: SurfaceEffectAccumulator = SurfaceEffectAccumulatorScript.new()
+	accumulator.sample_limit = 32
+	get_root().add_child(accumulator)
+	accumulator.rebuild_for_character(root)
+
+	var left_local := Vector3(-0.5, -0.05, 0.0)
+	var right_local := Vector3(0.5, -0.05, 0.0)
+	accumulator.set_sand_state(Vector3.RIGHT, -0.25, 1.0)
+	var left_after_first := accumulator.sample_effect_volume_local(left_local)
+	var right_after_first := accumulator.sample_effect_volume_local(right_local)
+	_assert(left_after_first.g > 0.1, "sand did not accumulate into the shared volume from the first direction")
+	_assert(right_after_first.g < 0.1, "sand ignored the first wind front direction")
+
+	accumulator.set_sand_state(Vector3.LEFT, -0.25, 1.0)
+	var left_after_second := accumulator.sample_effect_volume_local(left_local)
+	var right_after_second := accumulator.sample_effect_volume_local(right_local)
+	_assert(left_after_second.g > 0.1, "previous sand accumulation was lost after changing direction")
+	_assert(right_after_second.g > 0.1, "sand did not accumulate into the shared volume after changing direction")
+	print("sand_accumulates_in_shared_volume: left=%.3f right=%.3f" % [
+		left_after_second.g,
+		right_after_second.g,
+	])
+
+	root.queue_free()
+	accumulator.queue_free()
+
+
 func _make_capsule(layer_name: String, radius: float, height: float) -> MeshInstance3D:
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.name = layer_name
@@ -164,6 +250,33 @@ func _make_split_slot_shell() -> MeshInstance3D:
 	mesh.surface_set_material(1, _make_standard_material(Color(0.75, 0.32, 0.18)))
 	mesh_instance.mesh = mesh
 
+	return mesh_instance
+
+
+func _make_sand_panel() -> MeshInstance3D:
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.name = "SandPanel"
+
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([
+		Vector3(-0.5, -0.05, 0.0),
+		Vector3(0.5, -0.05, 0.0),
+		Vector3(0.5, 0.05, 0.0),
+		Vector3(-0.5, 0.05, 0.0),
+	])
+	arrays[Mesh.ARRAY_NORMAL] = PackedVector3Array([
+		Vector3.UP,
+		Vector3.UP,
+		Vector3.UP,
+		Vector3.UP,
+	])
+	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array([0, 1, 2, 0, 2, 3])
+
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	mesh.surface_set_material(0, _make_standard_material(Color(0.45, 0.48, 0.52)))
+	mesh_instance.mesh = mesh
 	return mesh_instance
 
 

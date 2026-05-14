@@ -43,8 +43,9 @@ func _run() -> void:
 	get_root().add_child(accumulator)
 	accumulator.rebuild_for_character(root)
 
+	provider.lift = 0.6
 	var attached_world := accumulator.add_surface_effect_at_triangle(
-		12,
+		2,
 		mesh_instance,
 		0,
 		PackedInt32Array([0, 1, 2]),
@@ -53,22 +54,30 @@ func _run() -> void:
 		0.1,
 		1.0
 	)
-	var local_before := _first_event_center(mesh_instance)
-	_assert(local_before.distance_to(root.to_local(attached_world)) < 0.001, "deformed event initialized at wrong position")
+	var visual_before := root.to_local(attached_world)
+	var rest_center := _custom_rest_center_local(mesh_instance)
+	var volume_before := accumulator.sample_effect_volume_local(rest_center)
+	_assert(abs(visual_before.z - 0.2) < 0.001, "deformation provider did not resolve the visual hit position")
+	_assert(volume_before.g > 0.1, "deformed event was not accumulated at the rest-space triangle position")
+	_assert(_uses_rest_volume_position(mesh_instance), "deformed test material is not sampling rest-space volume coordinates")
 
-	provider.lift = 0.6
+	_deform_mesh_preserving_rest_attributes(mesh_instance, provider.lift)
 	for frame in 3:
 		await process_frame
 
-	var local_after := _first_event_center(mesh_instance)
-	var delta := local_before.distance_to(local_after)
-	_assert(abs(local_after.z - 0.2) < 0.001, "deformed event did not follow provider vertex position")
-	_assert(delta > 0.19, "deformed event did not move enough")
+	var visual_after := _visual_triangle_center_local(mesh_instance)
+	var rest_after := _custom_rest_center_local(mesh_instance)
+	var volume_after := accumulator.sample_effect_volume_local(rest_after)
+	var visual_rest_delta := visual_after.distance_to(rest_after)
+	_assert(abs(visual_after.z - 0.2) < 0.001, "runtime mesh deformation was not applied to the visual triangle")
+	_assert(rest_after.distance_to(rest_center) < 0.001, "runtime mesh deformation changed the rest-space sampling coordinate")
+	_assert(volume_after.g > 0.1, "rest-space volume event did not survive runtime mesh deformation")
 
-	print("deformed_surface_attachment: delta=%.3f before=%s after=%s" % [
-		delta,
-		str(local_before),
-		str(local_after),
+	print("deformed_surface_attachment: visual_z=%.3f rest_z=%.3f volume_g=%.3f visual_rest_delta=%.3f" % [
+		visual_after.z,
+		rest_after.z,
+		volume_after.g,
+		visual_rest_delta,
 	])
 
 	root.queue_free()
@@ -95,12 +104,40 @@ func _create_triangle_mesh() -> ArrayMesh:
 	return mesh
 
 
-func _first_event_center(mesh_instance: MeshInstance3D) -> Vector3:
+func _deform_mesh_preserving_rest_attributes(mesh_instance: MeshInstance3D, lift: float) -> void:
+	var source_mesh := mesh_instance.mesh
+	var arrays := source_mesh.surface_get_arrays(0)
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	vertices[2].z += lift
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+
+	var mesh := ArrayMesh.new()
+	var flags := Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, flags)
+	mesh.surface_set_material(0, source_mesh.surface_get_material(0))
+	mesh_instance.mesh = mesh
+
+
+func _visual_triangle_center_local(mesh_instance: MeshInstance3D) -> Vector3:
+	var arrays := mesh_instance.mesh.surface_get_arrays(0)
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	return (vertices[0] + vertices[1] + vertices[2]) / 3.0
+
+
+func _custom_rest_center_local(mesh_instance: MeshInstance3D) -> Vector3:
+	var arrays := mesh_instance.mesh.surface_get_arrays(0)
+	var rest_positions: PackedFloat32Array = arrays[Mesh.ARRAY_CUSTOM0]
+	_assert(rest_positions.size() >= 12, "rest-space custom attribute was not generated")
+	var p0 := Vector3(rest_positions[0], rest_positions[1], rest_positions[2])
+	var p1 := Vector3(rest_positions[4], rest_positions[5], rest_positions[6])
+	var p2 := Vector3(rest_positions[8], rest_positions[9], rest_positions[10])
+	return (p0 + p1 + p2) / 3.0
+
+
+func _uses_rest_volume_position(mesh_instance: MeshInstance3D) -> bool:
 	var material := mesh_instance.get_surface_override_material(0) as ShaderMaterial
 	_assert(material != null, "deformed test material was not rebound")
-	var spheres: PackedVector4Array = material.get_shader_parameter("impact_spheres")
-	_assert(not spheres.is_empty(), "deformed event uniform was not pushed")
-	return Vector3(spheres[0].x, spheres[0].y, spheres[0].z)
+	return bool(material.get_shader_parameter("use_rest_volume_position"))
 
 
 func _assert(condition: bool, message: String) -> void:

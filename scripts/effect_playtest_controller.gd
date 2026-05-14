@@ -385,6 +385,6 @@ func _update_hud(status: String) -> void:
 		sand_direction_world.y,
 		sand_direction_world.z,
 	]
-	events_label.text = "Events %d / %d" % [accumulator.get_impact_count(), SurfaceEffectAccumulator.MAX_IMPACTS]
+	events_label.text = "Accumulated Events %d" % accumulator.get_impact_count()
 	asset_label.text = "Asset " + current_asset_name
 	status_label.text = status
