@@ -76,7 +76,7 @@ UV 대신 character-local/rest-space 좌표에서 효과를 관리한다.
 - 계산된 mask는 effect volume의 sand channel(effect id 2)에 누적된다.
 - direction이 바뀌어도 기존 volume channel은 유지된다.
 
-현재 shader에는 standalone sand render test를 위한 procedural sand 계산도 남아 있다. 게임 누적 데이터의 기준은 shared effect volume이다.
+현재 shader에는 standalone sand render test를 위한 procedural sand 계산도 남아 있다. `use_surface_effect_volume`이 true인 게임 누적 path에서는 procedural sand를 섞지 않고 shared effect volume만 사용한다.
 
 ## 현재 한계
 

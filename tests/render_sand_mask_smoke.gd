@@ -4,6 +4,7 @@ const VisualBaselineScript := preload("res://tests/visual_baseline.gd")
 const SHADER := preload("res://shaders/surface_effects.gdshader")
 const EARLY_OUTPUT_PATH := "res://artifacts/sand_front_early.png"
 const LATE_OUTPUT_PATH := "res://artifacts/sand_front_late.png"
+const VOLUME_OUTPUT_PATH := "res://artifacts/sand_volume_path.png"
 
 var failed := false
 
@@ -63,13 +64,24 @@ func _run() -> void:
 		VisualBaselineScript.describe_failure("render_sand_mask_smoke", "parallel_late", parallel_late)
 	)
 
-	print("sand_mask_smoke: early=%s late=%s left_early=%.3f left_late=%.3f right_late=%.3f parallel_late=%.3f" % [
+	var volume_probe := Vector3(0.0, -1.25, 0.0)
+	var volume_material := _make_sand_material()
+	_bind_empty_volume(volume_material)
+	volume_material.set_shader_parameter("sand_front", 1.0)
+	get_root().add_child(_make_perpendicular_quad("VolumeProbe", volume_probe, volume_material))
+	var volume_image := await _capture(camera, VOLUME_OUTPUT_PATH)
+	var volume_probe_brightness := _sample_brightness(volume_image, camera.unproject_position(volume_probe))
+	_assert(volume_probe_brightness < 0.20, "procedural sand leaked into the accumulated volume material path")
+
+	print("sand_mask_smoke: early=%s late=%s volume=%s left_early=%.3f left_late=%.3f right_late=%.3f parallel_late=%.3f volume_probe=%.3f" % [
 		EARLY_OUTPUT_PATH,
 		LATE_OUTPUT_PATH,
+		VOLUME_OUTPUT_PATH,
 		left_early,
 		left_late,
 		right_late,
 		parallel_late,
+		volume_probe_brightness,
 	])
 
 	quit(1 if failed else 0)
@@ -97,6 +109,21 @@ func _make_sand_material() -> ShaderMaterial:
 	material.set_shader_parameter("sand_front_softness", 0.35)
 	material.set_shader_parameter("character_inverse_world", Transform3D.IDENTITY)
 	return material
+
+
+func _bind_empty_volume(material: ShaderMaterial) -> void:
+	var images: Array[Image] = []
+	for layer in 4:
+		var image := Image.create_empty(4, 4, false, Image.FORMAT_RGBA8)
+		image.fill(Color(0.0, 0.0, 0.0, 0.0))
+		images.append(image)
+	var volume := Texture2DArray.new()
+	volume.create_from_images(images)
+	material.set_shader_parameter("use_surface_effect_volume", true)
+	material.set_shader_parameter("surface_effect_volume", volume)
+	material.set_shader_parameter("effect_volume_depth", 4.0)
+	material.set_shader_parameter("effect_volume_origin_local", Vector3(-2.0, -2.0, -2.0))
+	material.set_shader_parameter("effect_volume_inv_size", Vector3(0.25, 0.25, 0.25))
 
 
 func _make_perpendicular_quad(node_name: String, center: Vector3, material: ShaderMaterial) -> MeshInstance3D:

@@ -172,7 +172,10 @@ void fragment() {
 		surface_event = surface_event_volume_mask(volume_pos);
 	}
 	float blood = surface_event.a;
-	float sand = sand_mask(world_pos, world_normal);
+	float sand = 0.0;
+	if (!use_surface_effect_volume) {
+		sand = sand_mask(world_pos, world_normal);
+	}
 	vec4 base_sample = base_color;
 	if (use_base_texture) {
 		base_sample *= texture(base_texture, UV);

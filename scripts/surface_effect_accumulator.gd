@@ -19,6 +19,8 @@ const EMPTY_EFFECT_VOLUME_COLOR := Color(0.0, 0.0, 0.0, 0.0)
 @export var minimum_splat_voxel_span := 1.25
 @export var max_effect_volume_layer_uploads_per_frame := 2
 @export var max_sand_accumulation_samples := 4096
+@export var sand_exposure_cell_size := 0.08
+@export var sand_exposure_depth := 0.12
 @export var shader: Shader = preload("res://shaders/surface_effects.gdshader")
 
 var sampler := MeshSurfaceSampler.new()
@@ -46,6 +48,11 @@ var has_sand_accumulation_cursor := false
 var sand_accumulation_direction_world := Vector3.ZERO
 var sand_accumulated_front := -INF
 var sand_accumulated_amount := 0.0
+var has_sand_exposure_map := false
+var sand_exposure_direction_world := Vector3.ZERO
+var sand_exposure_axis_u := Vector3.RIGHT
+var sand_exposure_axis_v := Vector3.UP
+var sand_exposure_min_travel_by_cell := {}
 var has_synced_character_transform := false
 var last_synced_character_transform := Transform3D.IDENTITY
 
@@ -394,6 +401,7 @@ func set_sand_state(direction_world: Vector3, front: float, amount: float) -> vo
 			or sand_amount > sand_accumulated_amount + 0.000001
 		)
 		var min_travel := -INF if full_accumulation else sand_accumulated_front
+		_ensure_sand_exposure_map()
 		_accumulate_sand_to_effect_volume(min_travel)
 		has_sand_accumulation_cursor = true
 		sand_accumulation_direction_world = sand_direction_world
@@ -736,6 +744,8 @@ func _accumulate_sand_to_effect_volume(min_travel: float = -INF) -> void:
 		var travel: float = world_position.dot(direction_world)
 		if travel < min_travel or travel > max_travel:
 			continue
+		if not _is_sand_sample_exposed(world_position, travel):
+			continue
 
 		var front_mask: float = 1.0 - _smoothstep(sand_front, sand_front + sand_front_softness, travel)
 		if front_mask <= 0.0:
@@ -758,12 +768,70 @@ func _reset_sand_accumulation_cursor() -> void:
 	sand_accumulation_direction_world = Vector3.ZERO
 	sand_accumulated_front = -INF
 	sand_accumulated_amount = 0.0
+	has_sand_exposure_map = false
+	sand_exposure_min_travel_by_cell.clear()
 
 
 func _sand_sample_stride() -> int:
 	if max_sand_accumulation_samples <= 0:
 		return 1
 	return max(1, int(ceil(float(sampler.local_positions.size()) / float(max_sand_accumulation_samples))))
+
+
+func _ensure_sand_exposure_map() -> void:
+	if (
+		has_sand_exposure_map
+		and sand_direction_world.distance_squared_to(sand_exposure_direction_world) <= 0.000001
+	):
+		return
+	_rebuild_sand_exposure_map()
+
+
+func _rebuild_sand_exposure_map() -> void:
+	sand_exposure_min_travel_by_cell.clear()
+	has_sand_exposure_map = false
+	if character_root == null or sampler.local_positions.is_empty():
+		return
+
+	var direction_world := sand_direction_world.normalized()
+	if direction_world.length_squared() <= 0.000001:
+		return
+
+	var axis_u := direction_world.cross(Vector3.UP)
+	if axis_u.length_squared() <= 0.000001:
+		axis_u = direction_world.cross(Vector3.RIGHT)
+	sand_exposure_axis_u = axis_u.normalized()
+	sand_exposure_axis_v = sand_exposure_axis_u.cross(direction_world).normalized()
+	sand_exposure_direction_world = direction_world
+
+	for sample_index in sampler.local_positions.size():
+		var world_position: Vector3 = character_root.to_global(sampler.local_positions[sample_index])
+		var travel := world_position.dot(direction_world)
+		var cell_key := _sand_exposure_cell_key(world_position)
+		if (
+			not sand_exposure_min_travel_by_cell.has(cell_key)
+			or travel < float(sand_exposure_min_travel_by_cell[cell_key])
+		):
+			sand_exposure_min_travel_by_cell[cell_key] = travel
+
+	has_sand_exposure_map = true
+
+
+func _is_sand_sample_exposed(world_position: Vector3, travel: float) -> bool:
+	if not has_sand_exposure_map:
+		return true
+	var cell_key := _sand_exposure_cell_key(world_position)
+	if not sand_exposure_min_travel_by_cell.has(cell_key):
+		return true
+	var exposed_travel: float = sand_exposure_min_travel_by_cell[cell_key]
+	return travel <= exposed_travel + max(sand_exposure_depth, 0.001)
+
+
+func _sand_exposure_cell_key(world_position: Vector3) -> Vector2i:
+	var cell_size: float = max(sand_exposure_cell_size, 0.001)
+	var u: int = int(floor(world_position.dot(sand_exposure_axis_u) / cell_size))
+	var v: int = int(floor(world_position.dot(sand_exposure_axis_v) / cell_size))
+	return Vector2i(u, v)
 
 
 func _write_effect_volume_sample(effect_id: int, local_position: Vector3, strength: float, voxel_radius: int = 0) -> void:
